@@ -4,7 +4,7 @@ from datetime import datetime
 from django.http import JsonResponse
 from core.database_manager import get_db_connection
 from django.views.decorators.csrf import csrf_exempt
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import make_password, check_password
 from django.core.mail import EmailMultiAlternatives
 from .emails import build_welcome_email
 logger = logging.getLogger(__name__)
@@ -67,9 +67,45 @@ def register_user(request):
                 conn.close()
 
 
-# Get user by email and password
+# Login User
+@csrf_exempt
+def login_user(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            email = data.get('email')
+            password = data.get('password')
 
-# 
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            query = "SELECT UserID, FirstName, Password FROM teg_oltp.users WHERE Email = ?"
+            cursor.execute(query, (email, ))
+            row = cursor.fetchone()
+
+            if row:
+                user_id = row[0]
+                first_name = row[1]
+                hashed_password = row[2]
+
+                if check_password(password, hashed_password):
+                    return JsonResponse({
+                        'message': 'Inicio de sesión exitoso',
+                        'user': {
+                            'id': user_id,
+                            'firstName': first_name,
+                            'email': email
+                        }
+                    }, status=200)
+                else:
+                    return JsonResponse({'error': 'Contraseña incorrecta'}, status=401)
+            
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=400)
+        
+        finally:
+            if 'conn' in locals():
+                conn.close()
 
 
 
