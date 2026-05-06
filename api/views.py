@@ -22,3 +22,22 @@ def get_material_classifications(request):
         return JsonResponse(materialClass, safe=False)
     finally:
         conn.close()
+
+# Get material dimensions
+def get_material_dimensions(request):
+    conn = get_db_connection()
+    if conn is None:
+        return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+    
+    try:
+        cursor = conn.cursor()
+        query = "SELECT dimensionid, name, calculationmethod FROM teg_oltp.dimension ORDER BY name"
+        cursor.execute(query)
+        
+        materialDim = [
+            {'id': row[0], 'name': row[1], 'calculationmethod': row[2]} 
+            for row in cursor.fetchall()
+        ]
+        return JsonResponse(materialDim, safe=False)
+    finally:
+        conn.close()
