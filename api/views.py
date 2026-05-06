@@ -1,9 +1,13 @@
 import json
+import logging
 from datetime import datetime
 from django.http import JsonResponse
 from core.database_manager import get_db_connection
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.hashers import make_password
+from django.core.mail import EmailMultiAlternatives
+from .emails import build_welcome_email
+logger = logging.getLogger(__name__)
 
 
 
@@ -41,6 +45,17 @@ def register_user(request):
             """
             cursor.execute(query, (first_name, last_name, email, hashed_password, registration_date, is_active))
             conn.commit()
+
+            try:
+                subject, text_body, html_body = build_welcome_email(
+                    first_name=first_name,
+                    last_name=last_name,
+                )
+                message = EmailMultiAlternatives(subject=subject, body=text_body, to=[email])
+                message.attach_alternative(html_body, "text/html")
+                message.send(fail_silently=False)
+            except Exception as email_error:
+                logger.warning("Envío de correo de bienvenida ha fallado para %s: %s", email, email_error)
 
             return JsonResponse({'message': 'Usuario registrado con éxito'}, status=201)
        
