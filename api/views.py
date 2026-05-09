@@ -185,22 +185,35 @@ def reset_password(request):
             data = json.loads(request.body)
             email = data.get('email')
             input_code = data.get('code')
+            user_id = data.get('userId')
             new_password = data.get('newPassword')
+            conn = get_db_connection()
+            if conn is None:
+                return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+            cursor = conn.cursor()
 
-            saved_code = cache.get(f"reset_code_{email}")
-            if not saved_code or saved_code != input_code:
-                return JsonResponse({'error': 'El código es incorrecto o ha expirado'}, status=400)
+            if input_code:
+                saved_code = cache.get(f"reset_code_{email}")
+                if not saved_code or saved_code != input_code:
+                    return JsonResponse({'error': 'El código es incorrecto o ha expirado'}, status=400)
+            else:
+                if not user_id:
+                    return JsonResponse({'error': 'Código requerido'}, status=400)
+                cursor.execute(
+                    "SELECT UserID FROM teg_oltp.users WHERE UserID = ? AND Email = ?",
+                    (user_id, email)
+                )
+                if not cursor.fetchone():
+                    return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
 
             hashed_password = make_password(new_password)
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
 
             query = "UPDATE teg_oltp.users SET Password = ? WHERE Email = ?"
             cursor.execute(query, (hashed_password, email))
             conn.commit()
 
-            cache.delete(f"reset_code_{email}")
+            if input_code:
+                cache.delete(f"reset_code_{email}")
                 
             return JsonResponse({'message': 'Contraseña restablecida con éxito'}, status=200)
         
@@ -213,6 +226,98 @@ def reset_password(request):
         finally:
             if 'conn' in locals():
                 conn.close()
+
+
+# --- AUTH ---
+
+# Get user profile
+@csrf_exempt
+def get_user_profile(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            user_id = data.get('userId')
+
+            if not user_id:
+                return JsonResponse({'error': 'Usuario inválido'}, status=400)
+
+            conn = get_db_connection()
+            if conn is None:
+                return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+            cursor = conn.cursor()
+
+            query = """
+                SELECT firstname, lastname, email, pfpurl
+                FROM teg_oltp.users
+                WHERE userid = ?
+            """
+            cursor.execute(query, (user_id,))
+            row = cursor.fetchone()
+
+            if not row:
+                return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
+
+            return JsonResponse({
+                'firstName': row[0],
+                'lastName': row[1],
+                'email': row[2],
+                'pfpUrl': row[3]
+            }, status=200)
+
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+        except Exception as e:
+            return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+
+        finally:
+            if 'conn' in locals():
+                conn.close()
+
+
+@csrf_exempt
+def update_user_profile(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            user_id = data.get('userId')
+            first_name = data.get('firstName')
+            last_name = data.get('lastName')
+            email = data.get('email')
+
+            if not user_id or not first_name or not last_name or not email:
+                return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+            conn = get_db_connection()
+            if conn is None:
+                return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT UserID FROM teg_oltp.users WHERE Email = ? AND UserID <> ?",
+                (email, user_id)
+            )
+            if cursor.fetchone():
+                return JsonResponse({'error': 'Este correo ya está registrado. Pruebe con otro'}, status=400)
+
+            cursor.execute(
+                "UPDATE teg_oltp.users SET FirstName = ?, LastName = ?, Email = ? WHERE UserID = ?",
+                (first_name, last_name, email, user_id)
+            )
+            conn.commit()
+
+            return JsonResponse({'message': 'Perfil actualizado con éxito'}, status=200)
+
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+        except Exception as e:
+            return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+
+        finally:
+            if 'conn' in locals():
+                conn.close()
+
 
 # --- MATERIALS VIEW ---
 

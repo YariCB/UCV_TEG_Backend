@@ -5,6 +5,8 @@ from .views import(
     send_reset_code,
     verify_reset_code,
     reset_password,
+    get_user_profile,
+    update_user_profile,
     get_material_classifications,
     get_material_dimensions,
     
@@ -17,6 +19,8 @@ urlpatterns = [
     path('auth/send-code/', send_reset_code, name='send_reset_code'),
     path('auth/verify-code/', verify_reset_code, name='verify_code'),
     path('auth/reset-password/', reset_password, name='reset_password'),
+    path('auth/profile/', get_user_profile, name='get_user_profile'),
+    path('auth/profile/update/', update_user_profile, name='update_user_profile'),
     
     # Materials
     path('materials/classifications/', get_material_classifications, name='get_material_classifications'),
