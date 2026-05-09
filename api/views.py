@@ -1,12 +1,15 @@
 import json
 import logging
+import random
+import string
 from datetime import datetime
 from django.http import JsonResponse
 from core.database_manager import get_db_connection
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.hashers import make_password, check_password
 from django.core.mail import EmailMultiAlternatives
-from .emails import build_welcome_email
+from django.core.cache import cache
+from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
 
@@ -79,7 +82,7 @@ def login_user(request):
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            query = "SELECT UserID, FirstName, Password FROM teg_oltp.users WHERE Email = ?"
+            query = "SELECT UserID, FirstName, Password FROM teg_oltp.users WHERE Email = ? AND isActive = true"
             cursor.execute(query, (email, ))
             row = cursor.fetchone()
 
@@ -108,6 +111,108 @@ def login_user(request):
                 conn.close()
 
 
+# Password Recovery
+
+@csrf_exempt
+def send_reset_code(request):
+    print("I'm in send_reset_code")
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            email = data.get('email')
+
+            # Verificación de existencia del usuario (correo)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            query = "SELECT UserID FROM teg_oltp.users WHERE Email = ?"
+            cursor.execute(query, (email,))
+            if not cursor.fetchone():
+                return JsonResponse({'error': 'Este correo no está registrado'}, status=404)
+            
+            # Generación de código aleatorio
+            code = ''.join(random.choices(string.digits, k=6))
+            cache.set(f"reset_code_{email}", code, timeout=15*60)  # Código válido por 15 minutos
+
+            try:
+                subject, text, html = build_reset_email(code)
+                msg = EmailMultiAlternatives(subject, text, to=[email])
+                msg.attach_alternative(html, "text/html")
+                msg.send(fail_silently=False)
+
+                return JsonResponse({'message': 'Código de recuperación enviado'}, status=200)
+            
+            except Exception as email_error:
+                print(f"Error al enviar correo de recuperación a {email}: {email_error}")
+                return JsonResponse({
+                    'error': 'No se puedo enviar el correo de recuperación. Por favor, intente más tarde.'
+                }, status=503)
+            
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Datos inválidoS'}, status=400)
+        
+        except Exception as e:
+            return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+            
+        finally:
+            if 'conn' in locals():
+                conn.close()
+
+@csrf_exempt
+def verify_reset_code(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            email = data.get('email')
+            code = data.get('code')
+
+            cached_code = cache.get(f"reset_code_{email}")
+
+            if cached_code and cached_code == code:
+                return JsonResponse({'message': 'Código verificado'}, status=200)
+            
+            return JsonResponse({'error': 'El código es incorrecto o ha expirado'}, status=400)
+        
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'El formato de los datos es inválido'}, status=400)
+        
+        except Exception as e:
+            return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+
+@csrf_exempt
+def reset_password(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            email = data.get('email')
+            input_code = data.get('code')
+            new_password = data.get('newPassword')
+
+            saved_code = cache.get(f"reset_code_{email}")
+            if not saved_code or saved_code != input_code:
+                return JsonResponse({'error': 'El código es incorrecto o ha expirado'}, status=400)
+
+            hashed_password = make_password(new_password)
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            query = "UPDATE teg_oltp.users SET Password = ? WHERE Email = ?"
+            cursor.execute(query, (hashed_password, email))
+            conn.commit()
+
+            cache.delete(f"reset_code_{email}")
+                
+            return JsonResponse({'message': 'Contraseña restablecida con éxito'}, status=200)
+        
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Datos inválidos'}, status=400)
+        
+        except Exception as e:
+            return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+        
+        finally:
+            if 'conn' in locals():
+                conn.close()
 
 # --- MATERIALS VIEW ---
 
