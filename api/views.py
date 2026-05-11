@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 import random
@@ -9,6 +10,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.hashers import make_password, check_password
 from django.core.mail import EmailMultiAlternatives
 from django.core.cache import cache
+from django.core.files.storage import FileSystemStorage
+from django.conf import settings
 from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
@@ -228,8 +231,6 @@ def reset_password(request):
                 conn.close()
 
 
-# --- AUTH ---
-
 # Get user profile
 @csrf_exempt
 def get_user_profile(request):
@@ -275,15 +276,58 @@ def get_user_profile(request):
                 conn.close()
 
 
+# Update user profile
+# @csrf_exempt
+# def update_user_profile(request):
+#     if request.method == 'POST':
+#         try:
+#             data = json.loads(request.body)
+#             user_id = data.get('userId')
+#             first_name = data.get('firstName')
+#             last_name = data.get('lastName')
+#             email = data.get('email')
+
+#             if not user_id or not first_name or not last_name or not email:
+#                 return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+#             conn = get_db_connection()
+#             if conn is None:
+#                 return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+#             cursor = conn.cursor()
+
+#             cursor.execute(
+#                 "SELECT UserID FROM teg_oltp.users WHERE Email = ? AND UserID <> ?",
+#                 (email, user_id)
+#             )
+#             if cursor.fetchone():
+#                 return JsonResponse({'error': 'Este correo ya está registrado. Pruebe con otro'}, status=400)
+
+#             cursor.execute(
+#                 "UPDATE teg_oltp.users SET FirstName = ?, LastName = ?, Email = ? WHERE UserID = ?",
+#                 (first_name, last_name, email, user_id)
+#             )
+#             conn.commit()
+
+#             return JsonResponse({'message': 'Perfil actualizado con éxito'}, status=200)
+
+#         except json.JSONDecodeError:
+#             return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+#         except Exception as e:
+#             return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+
+#         finally:
+#             if 'conn' in locals():
+#                 conn.close()
 @csrf_exempt
 def update_user_profile(request):
     if request.method == 'POST':
         try:
-            data = json.loads(request.body)
-            user_id = data.get('userId')
-            first_name = data.get('firstName')
-            last_name = data.get('lastName')
-            email = data.get('email')
+            user_id = request.POST.get('userId')
+            first_name = request.POST.get('firstName')
+            last_name = request.POST.get('lastName')
+            email = request.POST.get('email')
+            avatar_file = request.FILES.get('avatar')
 
             if not user_id or not first_name or not last_name or not email:
                 return JsonResponse({'error': 'Datos inválidos'}, status=400)
@@ -299,14 +343,42 @@ def update_user_profile(request):
             )
             if cursor.fetchone():
                 return JsonResponse({'error': 'Este correo ya está registrado. Pruebe con otro'}, status=400)
+            
+            profile_pic_url = None
+            if avatar_file:
+                relative_folder = os.path.join('users', f'user_{user_id}', 'pfp')
+                full_path = os.path.join(settings.MEDIA_ROOT, relative_folder)
 
-            cursor.execute(
-                "UPDATE teg_oltp.users SET FirstName = ?, LastName = ?, Email = ? WHERE UserID = ?",
-                (first_name, last_name, email, user_id)
-            )
+                if not os.path.exists(full_path):
+                    os.makedirs(full_path)
+
+                original_ext = os.path.splitext(avatar_file.name)[1].lower()
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                safe_filename = f"pfp_{user_id}_{timestamp}{original_ext}"
+
+                fs = FileSystemStorage(location=full_path)
+                filename = fs.save(safe_filename, avatar_file)
+
+                profile_pic_url = f"{settings.MEDIA_URL}{relative_folder}/{filename}".replace("\\", "/")
+            
+            if profile_pic_url:
+                query = """
+                    UPDATE teg_oltp.users 
+                    SET FirstName = ?, LastName = ?, Email = ?, pfpUrl = ?
+                    WHERE UserID = ?
+                """
+                cursor.execute(query, (first_name, last_name, email, profile_pic_url, user_id  ))
+            else:
+                cursor.execute(
+                    "UPDATE teg_oltp.users SET FirstName = ?, LastName = ?, Email = ? WHERE UserID = ?",
+                    (first_name, last_name, email, user_id)
+                )
             conn.commit()
 
-            return JsonResponse({'message': 'Perfil actualizado con éxito'}, status=200)
+            return JsonResponse({
+                'message': 'Perfil actualizado con éxito',
+                'profilePic': profile_pic_url
+            }, status=200)
 
         except json.JSONDecodeError:
             return JsonResponse({'error': 'Datos inválidos'}, status=400)
