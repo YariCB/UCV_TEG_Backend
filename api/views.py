@@ -415,3 +415,100 @@ def get_dimension_units(request, dimension_id):
         return JsonResponse(dimensionUnit, safe=False)
     finally:
         conn.close()
+
+# Create a new material
+@csrf_exempt
+def create_material(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Metodo no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        user_id = data.get('userId')
+        material_class_id = data.get('materialClassId')
+        name = data.get('name')
+        cost_usd = data.get('costUsd')
+        unit_id = data.get('unitId')
+        weight_g = data.get('weightG')
+        measurement = data.get('measurement')
+        wastage_factor = data.get('wastageFactor')
+        min_purchase_quantity = data.get('minPurchaseQuantity')
+        density_value = data.get('densityValue')
+        density_unit_id = data.get('densityUnitId')
+        width = data.get('width')
+        length = data.get('length')
+        thickness = data.get('thickness')
+        thickness_unit_id = data.get('thicknessUnitId')
+        is_active = data.get('isActive', True)
+
+        if not user_id or not material_class_id or not name:
+            return JsonResponse({'error': 'Datos invalidos'}, status=400)
+
+        required_numbers = [cost_usd, unit_id, weight_g, wastage_factor, min_purchase_quantity]
+        if any(value is None for value in required_numbers):
+            return JsonResponse({'error': 'Datos invalidos'}, status=400)
+
+        conn = get_db_connection()
+        if conn is None:
+            return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO teg_oltp.material(
+                userid,
+                materialclassid,
+                name,
+                cost_usd,
+                unitid,
+                weight_g,
+                measurement,
+                wastagefactor,
+                minpurchasequantity,
+                densityvalue,
+                densityunitid,
+                width,
+                length,
+                thickness,
+                thicknessunitid,
+                isactive
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING materialid
+        """
+
+        cursor.execute(
+            query,
+            (
+                user_id,
+                material_class_id,
+                name,
+                cost_usd,
+                unit_id,
+                weight_g,
+                measurement,
+                wastage_factor,
+                min_purchase_quantity,
+                density_value,
+                density_unit_id,
+                width,
+                length,
+                thickness,
+                thickness_unit_id,
+                is_active
+            )
+        )
+        row = cursor.fetchone()
+        material_id = row[0] if row else None
+        conn.commit()
+
+        return JsonResponse({'message': 'Material creado con éxito', 'materialId': material_id}, status=201)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+    except Exception as e:
+        return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+
+    finally:
+        if 'conn' in locals():
+            conn.close()
