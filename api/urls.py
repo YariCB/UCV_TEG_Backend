@@ -9,7 +9,7 @@ from .views import(
     update_user_profile,
     get_material_classifications,
     get_material_dimensions,
-    
+    get_dimension_units
 )
 
 urlpatterns = [
@@ -25,4 +25,5 @@ urlpatterns = [
     # Materials
     path('materials/classifications/', get_material_classifications, name='get_material_classifications'),
     path('materials/dimensions/', get_material_dimensions, name='get_material_dimensions'),
+    path('materials/units/<int:dimension_id>/', get_dimension_units, name='get_dimension_units'),
 ]

@@ -16,7 +16,6 @@ from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
 
-
 # --- AUTH ---
 
 # Register user
@@ -275,50 +274,6 @@ def get_user_profile(request):
             if 'conn' in locals():
                 conn.close()
 
-
-# Update user profile
-# @csrf_exempt
-# def update_user_profile(request):
-#     if request.method == 'POST':
-#         try:
-#             data = json.loads(request.body)
-#             user_id = data.get('userId')
-#             first_name = data.get('firstName')
-#             last_name = data.get('lastName')
-#             email = data.get('email')
-
-#             if not user_id or not first_name or not last_name or not email:
-#                 return JsonResponse({'error': 'Datos inválidos'}, status=400)
-
-#             conn = get_db_connection()
-#             if conn is None:
-#                 return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
-#             cursor = conn.cursor()
-
-#             cursor.execute(
-#                 "SELECT UserID FROM teg_oltp.users WHERE Email = ? AND UserID <> ?",
-#                 (email, user_id)
-#             )
-#             if cursor.fetchone():
-#                 return JsonResponse({'error': 'Este correo ya está registrado. Pruebe con otro'}, status=400)
-
-#             cursor.execute(
-#                 "UPDATE teg_oltp.users SET FirstName = ?, LastName = ?, Email = ? WHERE UserID = ?",
-#                 (first_name, last_name, email, user_id)
-#             )
-#             conn.commit()
-
-#             return JsonResponse({'message': 'Perfil actualizado con éxito'}, status=200)
-
-#         except json.JSONDecodeError:
-#             return JsonResponse({'error': 'Datos inválidos'}, status=400)
-
-#         except Exception as e:
-#             return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
-
-#         finally:
-#             if 'conn' in locals():
-#                 conn.close()
 @csrf_exempt
 def update_user_profile(request):
     if request.method == 'POST':
@@ -428,5 +383,35 @@ def get_material_dimensions(request):
             for row in cursor.fetchall()
         ]
         return JsonResponse(materialDim, safe=False)
+    finally:
+        conn.close()
+
+
+# Get units according to dimension
+def get_dimension_units(request, dimension_id):
+    conn = get_db_connection()
+    if conn is None:
+        return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+    
+    try:
+        cursor = conn.cursor()
+        query = """
+            SELECT unitid, name, abbreviation, conversionfactor, isbase
+            FROM teg_oltp.units
+            WHERE dimensionid = ?
+            ORDER BY abbreviation
+            """
+        cursor.execute(query, (dimension_id,))
+        
+        dimensionUnit = [
+            {'id': row[0],
+             'name': row[1],
+             'abbreviation': row[2],
+             'conversionfactor': row[3],
+             'isbase': row[4]
+            } 
+            for row in cursor.fetchall()
+        ]
+        return JsonResponse(dimensionUnit, safe=False)
     finally:
         conn.close()
