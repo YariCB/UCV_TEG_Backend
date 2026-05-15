@@ -540,6 +540,95 @@ def deactivate_material(request, material_id):
         conn.close()
 
 
+# Update material
+@csrf_exempt
+def update_material(request, material_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        material_class_id = data.get('materialClassId')
+        name = data.get('name')
+        cost_usd = data.get('costUsd')
+        unit_id = data.get('unitId')
+        weight_g = data.get('weightG')
+        measurement = data.get('measurement')
+        wastage_factor = data.get('wastageFactor')
+        min_purchase_quantity = data.get('minPurchaseQuantity')
+        density_value = data.get('densityValue')
+        density_unit_id = data.get('densityUnitId')
+        width = data.get('width')
+        length = data.get('length')
+        thickness = data.get('thickness')
+        thickness_unit_id = data.get('thicknessUnitId')
+
+        if not material_class_id or not name:
+            return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+        required_numbers = [cost_usd, unit_id, weight_g, wastage_factor, min_purchase_quantity]
+        if any(value is None for value in required_numbers):
+            return JsonResponse({'error': 'Datos inválidos'}, status=400)
+
+        conn = get_db_connection()
+        if conn is None:
+            return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+
+        cursor = conn.cursor()
+        query = """
+            UPDATE teg_oltp.material
+            SET materialclassid = ?,
+                name = ?,
+                cost_usd = ?,
+                unitid = ?,
+                weight_g = ?,
+                measurement = ?,
+                wastagefactor = ?,
+                minpurchasequantity = ?,
+                densityvalue = ?,
+                densityunitid = ?,
+                width = ?,
+                length = ?,
+                thickness = ?,
+                thicknessunitid = ?
+            WHERE materialid = ?
+        """
+
+        cursor.execute(
+            query,
+            (
+                material_class_id,
+                name,
+                cost_usd,
+                unit_id,
+                weight_g,
+                measurement,
+                wastage_factor,
+                min_purchase_quantity,
+                density_value,
+                density_unit_id,
+                width,
+                length,
+                thickness,
+                thickness_unit_id,
+                material_id
+            )
+        )
+        conn.commit()
+
+        if cursor.rowcount == 0:
+            return JsonResponse({'error': 'Material no encontrado'}, status=404)
+
+        return JsonResponse({'message': 'Material actualizado'}, status=200)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Datos inválidos'}, status=400)
+    except Exception as e:
+        return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+
 # Get user materials
 def get_user_materials(request, user_id):
     conn = get_db_connection()

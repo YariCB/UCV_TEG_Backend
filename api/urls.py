@@ -12,7 +12,8 @@ from .views import(
     get_dimension_units,
     create_material,
     get_user_materials,
-    deactivate_material
+    deactivate_material,
+    update_material
 )
 
 urlpatterns = [
@@ -31,5 +32,6 @@ urlpatterns = [
     path('materials/units/<int:dimension_id>/', get_dimension_units, name='get_dimension_units'),
     path('materials/create/', create_material, name='create_material'),
     path('materials/<int:material_id>/deactivate/', deactivate_material, name='deactivate_material'),
+    path('materials/<int:material_id>/update/', update_material, name='update_material'),
     path('materials/<int:user_id>/', get_user_materials, name='get_user_materials'),
 ]
