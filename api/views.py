@@ -512,3 +512,101 @@ def create_material(request):
     finally:
         if 'conn' in locals():
             conn.close()
+
+
+# Deactivate material
+@csrf_exempt
+def deactivate_material(request, material_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Metodo no permitido'}, status=405)
+
+    conn = get_db_connection()
+    if conn is None:
+        return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+
+    try:
+        cursor = conn.cursor()
+        query = "UPDATE teg_oltp.material SET isactive = false WHERE materialid = ?"
+        cursor.execute(query, (material_id,))
+        conn.commit()
+
+        if cursor.rowcount == 0:
+            return JsonResponse({'error': 'Material no encontrado'}, status=404)
+
+        return JsonResponse({'message': 'Material desactivado'}, status=200)
+    except Exception as e:
+        return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+    finally:
+        conn.close()
+
+
+# Get user materials
+def get_user_materials(request, user_id):
+    conn = get_db_connection()
+    if conn is None:
+        return JsonResponse({'error': 'No se pudo conectar a la BD'}, status=500)
+    
+    try:
+        cursor = conn.cursor()
+        query = """
+            SELECT 	M.materialid,
+                    M.name,
+                    M.materialclassid,
+                    C.name AS MaterialClassName,
+                    M.cost_usd,
+                    M.unitid,
+                    U.abbreviation,
+                    M.weight_g,
+                    CASE
+                        WHEN M.measurement IS NOT NULL THEN CONCAT(M.measurement, ' ', U.abbreviation)
+                        ELSE CONCAT(M.length, 'x', M.width, ' ', U.abbreviation)
+                    END AS Measurement,
+                    M.measurement,
+                    M.length,
+                    M.width,
+                    M.thickness,
+                    M.thicknessunitid,
+                    M.wastagefactor,
+                    M.minpurchasequantity,
+                    M.densityvalue,
+                    M.densityunitid,	
+                    M.isactive,
+                    U.dimensionid,
+                    D.name AS DimensionName
+            FROM teg_oltp.material M
+            JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
+            JOIN teg_oltp.units U ON M.unitid = U.unitid
+            LEFT JOIN teg_oltp.units U_dens ON M.densityunitid = U_dens.unitid
+            LEFT JOIN teg_oltp.units U_gros ON M.thicknessunitid = U_gros.unitid
+            JOIN teg_oltp.dimension D ON U.dimensionid = D.dimensionid
+            WHERE M.userid = ? AND M.isActive = true
+            """
+        cursor.execute(query, (user_id,))
+        
+        userMaterials = [
+            {'id': row[0],
+             'name': row[1],
+             'materialClassId': row[2],
+             'materialClassName': row[3],
+             'costUsd': row[4],
+             'unitId': row[5],
+             'unitAbbreviation': row[6],
+             'weightG': row[7],
+             'measurement': row[8],
+             'length': row[10],
+             'width': row[11],
+             'thickness': row[12],
+             'thicknessUnitId': row[13],
+             'wastageFactor': row[14],
+             'minPurchaseQuantity': row[15],
+             'densityValue': row[16],
+             'densityUnitId': row[17],
+             'isActive': row[18],
+             'dimensionId': row[19],
+             'dimensionName': row[20]
+            } 
+            for row in cursor.fetchall()
+        ]
+        return JsonResponse(userMaterials, safe=False)
+    finally:
+        conn.close()
