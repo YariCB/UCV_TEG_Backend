@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     g++ \
+    python3-numpy \
+    blender \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

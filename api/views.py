@@ -3,6 +3,10 @@ import json
 import logging
 import random
 import string
+import shutil
+import subprocess
+import re
+from pathlib import Path
 from datetime import datetime
 from django.http import JsonResponse
 from core.database_manager import get_db_connection
@@ -14,6 +18,18 @@ from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
+
+ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.gltf', '.stl'}
+MAX_SUBMESHES = 25
+
+_SAFE_SEGMENT_RE = re.compile(r'[^a-zA-Z0-9_-]')
+
+
+def _sanitize_path_segment(value, fallback):
+    if value is None:
+        return fallback
+    cleaned = _SAFE_SEGMENT_RE.sub('_', str(value)).strip('_')
+    return cleaned or fallback
 
 
 # --- AUTH ---
@@ -344,6 +360,128 @@ def update_user_profile(request):
         finally:
             if 'conn' in locals():
                 conn.close()
+
+
+# --- MODEL PROCESSING ---
+
+@csrf_exempt
+def evaluate_3d_model(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    user_id = request.POST.get('userId')
+    project_id = request.POST.get('projectId')
+    if not user_id or not project_id:
+        return JsonResponse({'error': 'userId y projectId son requeridos'}, status=400)
+
+    uploaded_file = request.FILES.get('model')
+    if not uploaded_file:
+        return JsonResponse({'error': 'Archivo requerido'}, status=400)
+
+    original_ext = os.path.splitext(uploaded_file.name)[1].lower()
+    if original_ext not in ALLOWED_MODEL_EXTENSIONS:
+        return JsonResponse({'error': 'Extensión no permitida'}, status=400)
+
+    blender_path = shutil.which('blender')
+    if not blender_path:
+        return JsonResponse({'error': 'Blender no está disponible en el servidor'}, status=500)
+
+    script_path = Path(__file__).resolve().parent / 'blender_scripts' / 'evaluate_model.py'
+    if not script_path.exists():
+        return JsonResponse({'error': 'Script de evaluación no encontrado'}, status=500)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    safe_user_id = _sanitize_path_segment(user_id, 'unknown')
+    safe_project_id = _sanitize_path_segment(project_id, 'project')
+    relative_folder = os.path.join('users', f'user_{safe_user_id}', 'projects', safe_project_id)
+    full_folder = os.path.join(settings.MEDIA_ROOT, relative_folder)
+    os.makedirs(full_folder, exist_ok=True)
+
+    safe_filename = f"model_{timestamp}_{random_suffix}{original_ext}"
+    fs = FileSystemStorage(location=full_folder)
+    saved_filename = fs.save(safe_filename, uploaded_file)
+    input_path = os.path.join(full_folder, saved_filename)
+
+    base_name = os.path.splitext(saved_filename)[0]
+    output_filename = f"{base_name}.glb"
+    report_filename = f"{base_name}_report.json"
+    output_path = os.path.join(full_folder, output_filename)
+    report_path = os.path.join(full_folder, report_filename)
+
+    command = [
+        blender_path,
+        '-b',
+        '--factory-startup',
+        '--python',
+        str(script_path),
+        '--',
+        '--input',
+        input_path,
+        '--output',
+        output_path,
+        '--report',
+        report_path,
+        '--max-submeshes',
+        str(MAX_SUBMESHES),
+    ]
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return JsonResponse({'error': 'Tiempo de espera agotado durante el procesamiento'}, status=504)
+
+    if result.returncode != 0:
+        logger.error('Blender fallo: %s', result.stderr or result.stdout)
+        return JsonResponse({'error': 'No se pudo procesar el modelo 3D'}, status=500)
+
+    if not os.path.exists(report_path):
+        return JsonResponse({'error': 'No se generó el reporte de evaluación'}, status=500)
+
+    try:
+        with open(report_path, 'r', encoding='utf-8') as report_file:
+            report = json.load(report_file)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Reporte de evaluación inválido'}, status=500)
+
+    if report.get('error'):
+        logger.error('Error en reporte Blender: %s', report.get('error'))
+        if report.get('traceback'):
+            logger.error('Traceback Blender: %s', report.get('traceback'))
+        return JsonResponse({'error': report['error']}, status=422)
+
+    submesh_count = int(report.get('submesh_count', 0))
+    allowed = submesh_count <= MAX_SUBMESHES
+
+    response = {
+        'allowed': allowed,
+        'submeshCount': submesh_count,
+        'originalName': uploaded_file.name,
+    }
+
+    report_output_path = report.get('output_path') or output_path
+    if allowed and report.get('exported') and report_output_path and os.path.exists(report_output_path):
+        exported_filename = os.path.basename(report_output_path)
+        gltf_url = f"{settings.MEDIA_URL}{relative_folder}/{exported_filename}".replace('\\', '/')
+        response.update({
+            'gltfUrl': gltf_url,
+            'gltfFileName': exported_filename,
+        })
+    elif not allowed:
+        response['message'] = (
+            'El modelo supera el límite de submallados. '
+            'Por favor, ingrese un modelo con menos submallados.'
+        )
+    else:
+        response['message'] = 'No se pudo exportar el modelo a GLB.'
+
+    return JsonResponse(response, status=200)
 
 
 # --- MATERIALS VIEW ---

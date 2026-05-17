@@ -7,6 +7,7 @@ from .views import(
     reset_password,
     get_user_profile,
     update_user_profile,
+    evaluate_3d_model,
     get_material_classifications,
     get_material_dimensions,
     get_dimension_units,
@@ -25,6 +26,9 @@ urlpatterns = [
     path('auth/reset-password/', reset_password, name='reset_password'),
     path('auth/profile/', get_user_profile, name='get_user_profile'),
     path('auth/profile/update/', update_user_profile, name='update_user_profile'),
+
+    # Model processing
+    path('models/evaluate/', evaluate_3d_model, name='evaluate_3d_model'),
     
     # Materials
     path('materials/classifications/', get_material_classifications, name='get_material_classifications'),
