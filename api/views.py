@@ -851,6 +851,8 @@ def evaluate_3d_model(request):
         report_path,
         '--max-submeshes',
         str(MAX_SUBMESHES),
+        '--filename',
+        uploaded_file.name,
     ]
 
     try:
@@ -891,11 +893,13 @@ def evaluate_3d_model(request):
     # Evaluación de submallados permitidos
 
     submesh_count = int(report.get('submesh_count', 0))
+    submeshes_detail = report.get('submeshes', [])
     allowed = submesh_count <= MAX_SUBMESHES
 
     response = {
         'allowed': allowed,
         'submeshCount': submesh_count,
+        'submeshes': submeshes_detail,
         'originalName': uploaded_file.name,
     }
 

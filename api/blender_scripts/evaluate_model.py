@@ -6,6 +6,7 @@ import traceback
 import importlib
 import addon_utils
 import bpy # API de Blender Python, disponible dentro del entorno ejecutor de Blender
+import bmesh # Módulo de Blender para manipulación de mallas, parte de la API bpy
 
 
 # Creación del archivo JSON estructurado que Django espera como resultado del análisis de Blender
@@ -176,11 +177,126 @@ def count_mesh_objects():
     return len([obj for obj in bpy.context.scene.objects if obj.type == 'MESH'])
 
 
+def get_mesh_local_dimensions(mesh):
+    if not mesh or not mesh.vertices:
+        return 0.0, 0.0, 0.0
+
+    min_x = min(v.co.x for v in mesh.vertices)
+    max_x = max(v.co.x for v in mesh.vertices)
+    min_y = min(v.co.y for v in mesh.vertices)
+    max_y = max(v.co.y for v in mesh.vertices)
+    min_z = min(v.co.z for v in mesh.vertices)
+    max_z = max(v.co.z for v in mesh.vertices)
+
+    return max_x - min_x, max_y - min_y, max_z - min_z
+
+
+def analyze_model_submeshes(filename=""):
+    submeshes_info = []
+    scene = bpy.context.scene
+    unit_settings = scene.unit_settings
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+
+    # Detección del factor de escala de la escena
+    scene_scale = unit_settings.scale_length
+
+    # Extracción de la extensión del archivo
+    _, ext = os.path.splitext(filename.lower())
+
+    mesh_objects = [obj for obj in scene.objects if obj.type == 'MESH']
+
+    needs_millimeters_fix = False
+    if mesh_objects:
+        first_obj = mesh_objects[0]
+        first_eval = first_obj.evaluated_get(depsgraph)
+        first_mesh = first_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        dim_x, dim_y, dim_z = get_mesh_local_dimensions(first_mesh)
+        max_dim = max(dim_x, dim_y, dim_z)
+
+        # HEURÍSTICA: Si el modelo mide más de 50 "metros" virtuales y la escala de escena es 1.0,
+        # probablemente fue exportado en milímetros y se está interpretando como metros.
+        if max_dim > 50.0 and scene_scale == 1.0:
+            needs_millimeters_fix = True
+        if first_mesh:
+            first_eval.to_mesh_clear()
+
+    def to_cm(value):
+        if needs_millimeters_fix:
+            return value * 0.1
+        return value * scene_scale * 100.0
+
+    for idx, obj in enumerate(mesh_objects):
+        obj_eval = obj.evaluated_get(depsgraph)
+        mesh_eval = obj_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        dim_x, dim_y, dim_z = get_mesh_local_dimensions(mesh_eval)
+        bm = bmesh.new()
+        if mesh_eval:
+            bm.from_mesh(mesh_eval)
+
+        open_edges = 0
+        is_closed = False
+        volume_method = 'none'
+        if bm.faces:
+            bmesh.ops.triangulate(bm, faces=bm.faces)
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+            open_edges = sum(1 for e in bm.edges if not e.is_manifold)
+            is_closed = open_edges == 0
+            if is_closed:
+                volume_internal = abs(bm.calc_volume())
+                volume_method = 'closed'
+            else:
+                hull_bm = bmesh.new()
+                hull_bm.from_mesh(mesh_eval)
+                try:
+                    bmesh.ops.convex_hull(hull_bm, input=hull_bm.verts, use_existing_faces=True)
+                    volume_internal = abs(hull_bm.calc_volume())
+                    volume_method = 'convex_hull'
+                except Exception:
+                    volume_internal = 0.0
+                    volume_method = 'failed'
+                hull_bm.free()
+        else:
+            volume_internal = 0.0
+
+        bm.free()
+        if mesh_eval:
+            obj_eval.to_mesh_clear()
+
+        if needs_millimeters_fix:
+            volume_cm3 = volume_internal * 0.001
+        else:
+            real_cubic_meters = volume_internal * (scene_scale ** 3)
+            volume_cm3 = real_cubic_meters * 1000000.0
+
+        dims_cm = [to_cm(dim_x), to_cm(dim_y), to_cm(dim_z)]
+        dims_cm = sorted(dims_cm, reverse=True)
+        bbox_cm = {
+            'length': round(dims_cm[0], 2),
+            'width': round(dims_cm[1], 2),
+            'thickness': round(dims_cm[2], 2),
+        }
+        
+        submeshes_info.append({
+            'id': f"submesh-{idx + 1}",
+            'index': idx + 1,
+            'name': obj.name,
+            'bbox_cm': bbox_cm,
+            'volume_cm3': round(volume_cm3, 2),
+            'is_closed': is_closed,
+            'open_edges': open_edges,
+            'volume_method': volume_method,
+        })
+    
+    return submeshes_info
+
+
+
 # Función principal con la lógica secuencial del pipeline
 
 def main(args):
     import_model(args.input)
-    submesh_count = count_mesh_objects()
+    submeshes_detail = analyze_model_submeshes(args.filename or args.input)
+    submesh_count = len(submeshes_detail)
 
     exported = False
     output_path = None
@@ -194,6 +310,7 @@ def main(args):
     # Generación del reporte final de sincronización de datos con Django
     write_report(args.report, {
         'submesh_count': submesh_count,
+        'submeshes': submeshes_detail,
         'exported': exported,
         'output_path': output_path if exported else None,
         'export_format': export_format if exported else None,
@@ -207,6 +324,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument('--max-submeshes', type=int, default=10)
+    parser.add_argument('--filename', default='')
 
     # Pase de argumentos a Blender de '--' para evitar conflictos con sus propios parámetros de ejecución
     parsed_args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else [])
