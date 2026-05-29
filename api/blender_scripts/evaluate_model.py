@@ -236,9 +236,11 @@ def analyze_model_submeshes(filename=""):
         open_edges = 0
         is_closed = False
         volume_method = 'none'
+        area_internal = 0.0
         if bm.faces:
             bmesh.ops.triangulate(bm, faces=bm.faces)
             bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+            area_internal = sum(face.calc_area() for face in bm.faces)
             open_edges = sum(1 for e in bm.edges if not e.is_manifold)
             is_closed = open_edges == 0
             if is_closed:
@@ -264,16 +266,26 @@ def analyze_model_submeshes(filename=""):
 
         if needs_millimeters_fix:
             volume_cm3 = volume_internal * 0.001
+            area_cm2 = area_internal * 0.01
         else:
             real_cubic_meters = volume_internal * (scene_scale ** 3)
             volume_cm3 = real_cubic_meters * 1000000.0
+            area_cm2 = area_internal * (scene_scale ** 2) * 10000.0
 
-        dims_cm = [to_cm(dim_x), to_cm(dim_y), to_cm(dim_z)]
+        dim_x_cm = to_cm(dim_x)
+        dim_y_cm = to_cm(dim_y)
+        dim_z_cm = to_cm(dim_z)
+        dims_cm = [dim_x_cm, dim_y_cm, dim_z_cm]
         dims_cm = sorted(dims_cm, reverse=True)
         bbox_cm = {
             'length': round(dims_cm[0], 2),
             'width': round(dims_cm[1], 2),
             'thickness': round(dims_cm[2], 2),
+        }
+        bbox_cm_raw = {
+            'x': round(dim_x_cm, 2),
+            'y': round(dim_y_cm, 2),
+            'z': round(dim_z_cm, 2),
         }
         
         submeshes_info.append({
@@ -281,7 +293,9 @@ def analyze_model_submeshes(filename=""):
             'index': idx + 1,
             'name': obj.name,
             'bbox_cm': bbox_cm,
+            'bbox_cm_raw': bbox_cm_raw,
             'volume_cm3': round(volume_cm3, 2),
+            'area_cm2': round(area_cm2, 2),
             'is_closed': is_closed,
             'open_edges': open_edges,
             'volume_method': volume_method,
