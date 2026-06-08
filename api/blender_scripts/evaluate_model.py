@@ -301,25 +301,69 @@ def analyze_model_submeshes(filename=""):
             'volume_method': volume_method,
         })
     
-    return submeshes_info
+    return submeshes_info, needs_millimeters_fix
+
+
+def export_stl(output_path, scale=1.0):
+    if hasattr(bpy.ops.wm, 'stl_export'):
+        operator = bpy.ops.wm.stl_export
+    else:
+        enable_addon('io_mesh_stl')
+        operator = bpy.ops.export_mesh.stl
+
+    props = get_operator_props(operator)
+    kwargs = {'filepath': output_path}
+    if 'global_scale' in props:
+        kwargs['global_scale'] = scale
+    elif 'scale' in props:
+        kwargs['scale'] = scale
+    elif 'scale_factor' in props:
+        kwargs['scale_factor'] = scale
+
+    result = operator(**kwargs)
+    if isinstance(result, set) and 'FINISHED' not in result:
+        raise RuntimeError(f"Exportacion STL cancelada: {result}")
 
 
 
 # Función principal con la lógica secuencial del pipeline
 
 def main(args):
+    input_ext = os.path.splitext(args.input)[1].lower()
     import_model(args.input)
-    submeshes_detail = analyze_model_submeshes(args.filename or args.input)
+    submeshes_detail, needs_millimeters_fix = analyze_model_submeshes(args.filename or args.input)
     submesh_count = len(submeshes_detail)
 
     exported = False
     output_path = None
     export_format = None
+    stl_output_path = None
 
     # Verificación de cumplimiento del límite de submallados
     if args.max_submeshes <= 0 or submesh_count <= args.max_submeshes:
+        # Exportación a GLB para visualización web
         output_path, export_format = export_glb(args.output)
         exported = True
+        # Exportación a STL si se trata de proyecto de impresión 3D
+        # if args.for_3d_printing:
+        #     export_scale = 1.0 if needs_millimeters_fix else 1000.0
+        #     if input_ext == '.stl' and export_scale == 1.0:
+        #         stl_output_path = args.input
+        #     else:
+        #         stl_output_path = f"{os.path.splitext(args.output)[0]}.stl"
+        #         export_stl(stl_output_path, scale=export_scale)
+        if args.for_3d_printing:
+            export_scale = 1.0 if needs_millimeters_fix else 1000.0
+            base_output_path = os.path.splitext(args.output)[0]
+            stl_output_path = f"{base_output_path}.stl"
+            try:
+                stl_output_path = os.path.abspath(stl_output_path)
+                export_stl(stl_output_path, scale=export_scale)
+                sys.stdout.write(f"[Blender] Gemelo STL generado con éxito en: {stl_output_path}\n")
+            except Exception as e:
+                sys.stderr.write(f"[Blender] Error exportando STL para laminación: {str(e)}\n")
+                stl_output_path = None
+
 
     # Generación del reporte final de sincronización de datos con Django
     write_report(args.report, {
@@ -328,6 +372,9 @@ def main(args):
         'exported': exported,
         'output_path': output_path if exported else None,
         'export_format': export_format if exported else None,
+        'stl_output_path': stl_output_path if exported else None,
+        'needs_millimeters_fix': needs_millimeters_fix,
+        'stl_scale': 1.0 if needs_millimeters_fix else 1000.0,
     })
 
 
@@ -339,6 +386,7 @@ if __name__ == '__main__':
     parser.add_argument('--report', required=True)
     parser.add_argument('--max-submeshes', type=int, default=10)
     parser.add_argument('--filename', default='')
+    parser.add_argument('--for-3d-printing', action='store_true')
 
     # Pase de argumentos a Blender de '--' para evitar conflictos con sus propios parámetros de ejecución
     parsed_args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else [])

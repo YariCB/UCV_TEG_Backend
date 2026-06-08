@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
-# Instalación de dependencias del sistema y del driver ODBC para PostgreSQL
-RUN apt-get update && apt-get install -y \
+# Instalación de dependencias del sistema, driver ODBC, OpenGL por software y fuentes
+RUN apt-get update && apt-get install -y --no-install-recommends \
     unixodbc \
     unixodbc-dev \
     odbc-postgresql \
@@ -10,6 +10,11 @@ RUN apt-get update && apt-get install -y \
     g++ \
     python3-numpy \
     blender \
+    prusa-slicer \
+    xvfb \
+    xauth \
+    libgl1-mesa-dri \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -1,4 +1,5 @@
 import os
+import glob
 import json
 import logging
 import random
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.gltf', '.stl'}
 MAX_SUBMESHES = 25
+
+DEFAULT_PRUSA_CONFIG = Path(__file__).resolve().parent / 'prusa_defaults.ini'
 
 _SAFE_SEGMENT_RE = re.compile(r'[^a-zA-Z0-9_-]')
 
@@ -765,6 +768,312 @@ def _rewrite_obj_mtl_name(obj_path, new_name):
     except OSError:
         return
 
+
+# Función auxiliar para el rebanado y obtención de tiempo de impresión y
+# material a gastar usando PrusaSlicer por CLI
+def _find_prusa_slicer():
+    candidates = [
+        'prusa-slicer',
+        'prusa-slicer-console',
+        'prusa-slicer.exe',
+        'prusa-slicer-console.exe',
+        'PrusaSlicer',
+        'PrusaSlicer-console',
+        'PrusaSlicer.exe',
+        'PrusaSlicer-console.exe',
+    ]
+    for name in candidates:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def _find_prusa_config():
+    env_path = os.environ.get('PRUSA_SLICER_CONFIG')
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    if DEFAULT_PRUSA_CONFIG.exists():
+        return str(DEFAULT_PRUSA_CONFIG)
+
+    config_dirs = []
+    env_dir = os.environ.get('PRUSA_SLICER_CONFIG_DIR')
+    if env_dir:
+        config_dirs.append(env_dir)
+    env_dir = os.environ.get('SLIC3R_CONFIG_DIR')
+    if env_dir:
+        config_dirs.append(env_dir)
+
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        config_dirs.append(os.path.join(appdata, 'PrusaSlicer'))
+    localappdata = os.environ.get('LOCALAPPDATA')
+    if localappdata:
+        config_dirs.append(os.path.join(localappdata, 'PrusaSlicer'))
+
+    home = str(Path.home())
+    if home:
+        config_dirs.append(os.path.join(home, '.config', 'PrusaSlicer'))
+        config_dirs.append(os.path.join(home, 'AppData', 'Roaming', 'PrusaSlicer'))
+        config_dirs.append(os.path.join(home, 'AppData', 'Local', 'PrusaSlicer'))
+
+    candidate_files = [
+        'PrusaSlicer.ini',
+        'prusaslicer.ini',
+        'prusa-slicer.ini',
+    ]
+    for directory in config_dirs:
+        for filename in candidate_files:
+            candidate = os.path.join(directory, filename)
+            if os.path.exists(candidate):
+                return candidate
+
+    return None
+
+
+def _match_first(patterns, text):
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _match_float(patterns, text):
+    value = _match_first(patterns, text)
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
+
+
+def _trim_output(text, limit=2000):
+    if not text:
+        return ''
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... (truncated)"
+
+
+def _parse_time_to_minutes(time_text):
+    if not time_text:
+        return None
+
+    cleaned = time_text.strip()
+    # Formatos tipo HH:MM:SS o MM:SS
+    time_match = re.match(r'^(?:(\d+):)?(\d{1,2}):(\d{2})$', cleaned)
+    if time_match:
+        hours = int(time_match.group(1) or 0)
+        minutes = int(time_match.group(2))
+        seconds = int(time_match.group(3))
+        return (hours * 60) + minutes + (seconds / 60.0)
+
+    # Formatos con unidades: 1d 2h 3m 4s
+    total_minutes = 0.0
+    unit_matches = re.findall(r'(\d+(?:\.\d+)?)\s*([dhms])', cleaned, re.IGNORECASE)
+    if unit_matches:
+        for value, unit in unit_matches:
+            amount = float(value)
+            unit = unit.lower()
+            if unit == 'd':
+                total_minutes += amount * 1440
+            elif unit == 'h':
+                total_minutes += amount * 60
+            elif unit == 'm':
+                total_minutes += amount
+            elif unit == 's':
+                total_minutes += amount / 60.0
+        return total_minutes
+
+    # Fallback numérico directo
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _parse_gcode_estimates(gcode_path):
+    if not gcode_path or not os.path.exists(gcode_path):
+        return {}
+
+    printing_time_text = None
+    filament_g = None
+    filament_cm3 = None
+
+    time_patterns = [
+        r'estimated printing time(?:\s*\([^\)]*\))?\s*=\s*([^\r\n]+)',
+        r'printing time\s*=\s*([^\r\n]+)',
+    ]
+    filament_g_patterns = [
+        r'filament used\s*\[g\]\s*=\s*([\d\.]+)',
+        r'filament used\s*=\s*([\d\.]+)\s*g',
+    ]
+    filament_cm3_patterns = [
+        r'filament used\s*\[cm3\]\s*=\s*([\d\.]+)',
+        r'filament used\s*=\s*[\d\.]+\s*m\s*\(([\d\.]+)\s*cm3\)',
+        r'filament used\s*=\s*([\d\.]+)\s*cm3',
+    ]
+
+    try:
+        with open(gcode_path, 'r', encoding='utf-8', errors='ignore') as gcode_file:
+            for _ in range(250):
+                line = gcode_file.readline()
+                if not line:
+                    break
+                line = line.strip().lstrip(';').strip()
+                if not line:
+                    continue
+                if printing_time_text is None:
+                    printing_time_text = _match_first(time_patterns, line)
+                if filament_g is None:
+                    filament_g = _match_float(filament_g_patterns, line)
+                    if filament_g == 0.0:
+                        filament_g = None
+                if filament_cm3 is None:
+                    filament_cm3 = _match_float(filament_cm3_patterns, line)
+                    if filament_cm3 == 0.0:
+                        filament_cm3 = None
+                if printing_time_text and filament_g is not None and filament_cm3 is not None:
+                    break
+    except OSError:
+        return {}
+
+    result = {}
+    if printing_time_text:
+        result['printing_time_text'] = printing_time_text
+    if filament_g is not None:
+        result['filament_g'] = filament_g
+    if filament_cm3 is not None:
+        result['filament_cm3'] = filament_cm3
+    return result
+
+
+def _slice_with_prusa(stl_path):
+    """
+    Ejecuta PrusaSlicer CLI envuelto en xvfb-run (modo seguro sin xauth)
+    y parsea los resultados para el frontend.
+    """
+    try:
+        # Asegurar rutas absolutas en formato string nativo
+        absolute_stl = os.path.abspath(str(stl_path))
+        project_folder = os.path.dirname(absolute_stl)
+        gcode_path = os.path.splitext(absolute_stl)[0] + '.gcode'
+        config_str = os.path.abspath(str(DEFAULT_PRUSA_CONFIG))
+
+        # Logs de depuración interna visibles en la consola de Docker
+        logger.info(f"[PrusaCLI] Procesando STL: {absolute_stl}")
+        logger.info(f"[PrusaCLI] Usando Config: {config_str}")
+
+        # Comando optimizado: -n elimina dependencias de cookies Xauth
+        command = [
+            "xvfb-run",
+            "-n",
+            "99",
+            "--server-args=-screen 0 1024x768x24",
+            "prusa-slicer",
+            "--load", config_str,
+            "--center", "110,110",
+            "--slice", absolute_stl,
+            "--output", gcode_path
+        ]
+
+        # Ejecución del subproceso capturando logs
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+
+        # Si el código de salida no es cero, PrusaSlicer falló internamente
+        # if result.returncode != 0:
+        #     logger.error(f"[PrusaCLI] Código de salida fallido ({result.returncode}). Stderr: {result.stderr}")
+        #     return {
+        #         'success': False,
+        #         'error': f"PrusaSlicer falló internamente: {result.stderr or result.stdout}"
+        #     }
+        if result.returncode != 0:
+            logger.error(f"[PrusaCLI] PrusaSlicer falló. Código: {result.returncode}")
+            logger.error(f"[PrusaCLI] STDOUT: {result.stdout}")
+            logger.error(f"[PrusaCLI] STDERR: {result.stderr}")
+            return {
+                'success': False, 
+                'error': f"PrusaSlicer falló internamente: {result.stderr or result.stdout}"
+            }
+
+        # if not os.path.exists(gcode_path):
+        #     logger.error(f"[PrusaCLI] No se encontró el archivo G-code resultante en: {gcode_path}")
+        #     return {
+        #         'success': False,
+        #         'error': 'El motor de segmentación no generó el archivo resumen de estimación.'
+        #     }
+        actual_gcode_path = gcode_path
+        if not os.path.exists(actual_gcode_path):
+            found_gcodes = glob.glob(os.path.join(project_folder, "*.gcode"))
+            if found_gcodes:
+                actual_gcode_path = found_gcodes[0]
+                logger.info(f"[PrusaCLI] Archivo localizado dinámicamente en: {actual_gcode_path}")
+            else:
+                logger.error(f"[PrusaCLI] No se generó ningún archivo .gcode en la carpeta: {project_folder}")
+                logger.error(f"[PrusaCLI] Logs de salida de Prusa: {result.stdout}")
+                return {
+                    'success': False,
+                    'error': 'El motor de segmentación no pudo generar bloques válidos para esta geometría.'
+                }
+
+        # Inicialización de variables por defecto
+        printing_time_min = "0"
+        filament_grams = 0.0
+        filament_cm3 = 0.0
+
+        # Lectura del archivo G-code generado
+        with open(gcode_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()[-150:]
+            for line in lines:
+                clean_line = line.strip()
+                
+                if "; filament used [g]" in clean_line:
+                    parts = clean_line.split('=')
+                    if len(parts) > 1:
+                        filament_grams = float(parts[1].strip())
+                        
+                elif "; filament used [cm3]" in clean_line:
+                    parts = clean_line.split('=')
+                    if len(parts) > 1:
+                        filament_cm3 = float(parts[1].strip())
+                        
+                elif "; estimated printing time" in clean_line:
+                    parts = clean_line.split('=')
+                    if len(parts) > 1:
+                        raw_time = parts[1].strip()
+                        
+                        # Expresión regular para convertir horas y minutos a minutos totales
+                        hours_match = re.search(r'(\d+)\s*h', raw_time)
+                        minutes_match = re.search(r'(\d+)\s*m', raw_time)
+                        
+                        total_minutes = 0
+                        if hours_match:
+                            total_minutes += int(hours_match.group(1)) * 60
+                        if minutes_match:
+                            total_minutes += int(minutes_match.group(1))
+                            
+                        printing_time_min = str(total_minutes) if total_minutes > 0 else raw_time
+
+        # Limpieza del archivo G-code de inmediato
+        # if os.path.exists(gcode_path):
+        #     os.remove(gcode_path)
+        #     logger.info("[PrusaCLI] Limpieza de archivo G-code temporal ejecutada.")
+
+        return {
+            'success': True,
+            'printingTimeMin': printing_time_min,
+            'filamentGrams': filament_grams,
+            'filamentCm3': filament_cm3
+        }
+
+    except Exception as e:
+        logger.error(f"[PrusaCLI] Excepción inesperada: {str(e)}")
+        return {'success': False, 'error': str(e)}
+    
+
 # Vista principal para evaluación de modelos 3D
 # Recibe el archivo 3D cargado desde el front, lo almacena en el servidor (backend) e invoca el proceso de Blender (headless)
 # para contar sus submallados y exportarlo a formato .glb/.gltf
@@ -835,6 +1144,9 @@ def evaluate_3d_model(request):
     output_path = os.path.join(full_folder, output_filename)
     report_path = os.path.join(full_folder, report_filename)
 
+    # Captura del flag que indica si se trata de un proyecto de manufactura aditiva
+    for_3d_printing = request.POST.get('for3dPrinting') == 'true'
+
     # Construcción de la llamada por CLI para invocar a Blender Headless
     command = [
         blender_path,
@@ -854,6 +1166,10 @@ def evaluate_3d_model(request):
         '--filename',
         uploaded_file.name,
     ]
+
+    # Agregado de flag para proyectos de manufactura aditiva
+    if for_3d_printing:
+        command.append('--for-3d-printing')
 
     try:
         # Ejecución del análisis geométrico
@@ -912,6 +1228,26 @@ def evaluate_3d_model(request):
             'gltfUrl': gltf_url,
             'gltfFileName': exported_filename,
         })
+        # Llamado a PrusaSlicer por CLI
+        stl_path = report.get('stl_output_path')
+        if (not stl_path or not os.path.exists(stl_path)) and original_ext == '.stl' and os.path.exists(input_path):
+            stl_path = input_path
+        if for_3d_printing and stl_path and os.path.exists(stl_path):
+            slicing_results = _slice_with_prusa(stl_path)
+            if slicing_results.get('success'):
+                response.update({
+                    'printingTimeMin': slicing_results['printingTimeMin'],
+                    'filamentGrams': slicing_results['filamentGrams'],
+                    'filamentVolumeCm3': slicing_results['filamentCm3'],
+                })
+            else:
+                error_detail = slicing_results.get('error')
+                logger.error("Error en PrusaSlicer CLI: %s", error_detail)
+                response['slicingError'] = error_detail or 'No se pudo estimar el costo de impresión 3D.'
+                response['printingTimeMin'] = 'Desconocido'
+                response['filamentGrams'] = 0
+                response['filamentVolumeCm3'] = 0
+
     elif not allowed:
         response['message'] = (
             'El modelo supera el límite de submallados. '
