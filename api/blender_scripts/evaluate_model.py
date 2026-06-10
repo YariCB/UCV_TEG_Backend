@@ -325,6 +325,36 @@ def export_stl(output_path, scale=1.0):
         raise RuntimeError(f"Exportacion STL cancelada: {result}")
 
 
+# Función para llevar al suelo (Z=0) todas las mallas de la escena
+def ground_all_mesh_objects():
+    mesh_objects = [obj for obj in bpy.context.scene.objects if obj.type == 'MESH']
+    if not mesh_objects:
+        return
+
+    global_min_z = None
+    
+    # Encontrar el vértice más bajo en el espacio global de toda la escena
+    for obj in mesh_objects:
+        matrix = obj.matrix_world
+        for vertex in obj.data.vertices:
+            global_z = (matrix @ vertex.co).z
+            if global_min_z is None or global_z < global_min_z:
+                global_min_z = global_z
+
+    # Si el objeto no está en el suelo, desplazarlo verticalmente
+    if global_min_z is not None and global_min_z != 0.0:
+        for obj in mesh_objects:
+            obj.location.z -= global_min_z
+        
+        # Hacer que el cambio de localización sea nativo en los vértices (Apply Transformation)
+        bpy.ops.object.select_all(action='DESELECT')
+        for obj in mesh_objects:
+            obj.select_set(True)
+        if mesh_objects:
+            bpy.context.view_layer.objects.active = mesh_objects[0]
+            bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+
+
 
 # Función principal con la lógica secuencial del pipeline
 
@@ -344,20 +374,13 @@ def main(args):
         # Exportación a GLB para visualización web
         output_path, export_format = export_glb(args.output)
         exported = True
-        # Exportación a STL si se trata de proyecto de impresión 3D
-        # if args.for_3d_printing:
-        #     export_scale = 1.0 if needs_millimeters_fix else 1000.0
-        #     if input_ext == '.stl' and export_scale == 1.0:
-        #         stl_output_path = args.input
-        #     else:
-        #         stl_output_path = f"{os.path.splitext(args.output)[0]}.stl"
-        #         export_stl(stl_output_path, scale=export_scale)
         if args.for_3d_printing:
             export_scale = 1.0 if needs_millimeters_fix else 1000.0
             base_output_path = os.path.splitext(args.output)[0]
             stl_output_path = f"{base_output_path}.stl"
             try:
                 stl_output_path = os.path.abspath(stl_output_path)
+                ground_all_mesh_objects()
                 export_stl(stl_output_path, scale=export_scale)
                 sys.stdout.write(f"[Blender] Gemelo STL generado con éxito en: {stl_output_path}\n")
             except Exception as e:
