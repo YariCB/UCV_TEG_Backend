@@ -20,7 +20,7 @@ from django.conf import settings
 from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
-ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.gltf', '.stl'}
+ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
 MAX_SUBMESHES = 25
 
 DEFAULT_PRUSA_CONFIG = Path(__file__).resolve().parent / 'prusa_defaults.ini'
@@ -673,7 +673,9 @@ def get_user_materials(request, user_id):
                     M.densityunitid,	
                     M.isactive,
                     U.dimensionid,
-                    D.name AS DimensionName
+                    D.name AS DimensionName,
+                    D.calculationmethod,
+                    U.conversionfactor
             FROM teg_oltp.material M
             JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
             JOIN teg_oltp.units U ON M.unitid = U.unitid
@@ -685,26 +687,29 @@ def get_user_materials(request, user_id):
         cursor.execute(query, (user_id,))
         
         userMaterials = [
-            {'id': row[0],
-             'name': row[1],
-             'materialClassId': row[2],
-             'materialClassName': row[3],
-             'costUsd': row[4],
-             'unitId': row[5],
-             'unitAbbreviation': row[6],
-             'weightG': row[7],
-             'measurement': row[8],
-             'length': row[10],
-             'width': row[11],
-             'thickness': row[12],
-             'thicknessUnitId': row[13],
-             'wastageFactor': row[14],
-             'minPurchaseQuantity': row[15],
-             'densityValue': row[16],
-             'densityUnitId': row[17],
-             'isActive': row[18],
-             'dimensionId': row[19],
-             'dimensionName': row[20]
+            {   'id': row[0],
+                'name': row[1],
+                'materialClassId': row[2],
+                'materialClassName': row[3],
+                'costUsd': row[4],
+                'unitId': row[5],
+                'unitAbbreviation': row[6],
+                'weightG': row[7],
+                'measurementText': row[8],
+                'measurementNum': row[9],
+                'length': row[10],
+                'width': row[11],
+                'thickness': row[12],
+                'thicknessUnitId': row[13],
+                'wastageFactor': row[14],
+                'minPurchaseQuantity': row[15],
+                'densityValue': row[16],
+                'densityUnitId': row[17],
+                'isActive': row[18],
+                'dimensionId': row[19],
+                'dimensionName': row[20],
+                'calculationMethod': row[21],
+                'conversionFactor': row[22]
             } 
             for row in cursor.fetchall()
         ]
@@ -1078,3 +1083,8 @@ def evaluate_3d_model(request):
         response['message'] = 'No se pudo exportar el modelo a GLB.'
 
     return JsonResponse(response, status=200)
+
+
+# --- PROJECT ---
+
+# Guardado de la versión del proyecto
