@@ -21,7 +21,7 @@ from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
-MAX_SUBMESHES = 25
+MAX_SUBMESHES = 10
 
 DEFAULT_PRUSA_CONFIG = Path(__file__).resolve().parent / 'prusa_defaults.ini'
 
