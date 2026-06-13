@@ -1088,3 +1088,38 @@ def evaluate_3d_model(request):
 # --- PROJECT ---
 
 # Guardado de la versión del proyecto
+@csrf_exempt
+def save_project_version(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+
+            project_record = data.get('projectRecord', {})
+            submesh_records = data.get('submeshRecords', [])
+            material_assignment_records = data.get('materialAssignmentRecords', [])
+            version_record = data.get('versionRecord', {})
+
+            is_draft = version_record.get('isDraft', True)
+
+            # Impresiones de Prueba
+            print(f"\nGUARDANDO VERSIÓN - ¿Es borrador? {is_draft}")
+            print(f"----- Datos del Proyecto ----- \n{json.dumps(project_record, indent=2, ensure_ascii=False)}")
+            print(f"----- Datos de Submallados ({len(submesh_records)}) ----- \n{json.dumps(submesh_records, indent=2, ensure_ascii=False)}")
+            print(f"----- Datos de Asignación de Materiales ({len(material_assignment_records)}) ----- \n{json.dumps(material_assignment_records, indent=2, ensure_ascii=False)}")
+            print(f"----- Datos de la Versión ----- \n{json.dumps(version_record, indent=2, ensure_ascii=False)}\n")
+
+            return JsonResponse({
+                'success': True,
+                'message': 'Datos recibidos correctamente.',
+                'processedAsDraft': is_draft
+            }, status=200)
+        
+        except json.JSONDecodeError:
+            logger.error("Error al decodificar JSON en save_project_version")
+            return JsonResponse({'error': 'El cuerpo de la solicitud no es un JSON válido.'}, status=400)
+        
+        except Exception as e:
+            logger.error(f"Error inesperado en save_project_version: {str(e)}")
+            return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
+    
+    return JsonResponse({'error': 'Método no permitido. Use POST'}, status=405)

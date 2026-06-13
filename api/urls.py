@@ -14,7 +14,8 @@ from .views import(
     create_material,
     get_user_materials,
     deactivate_material,
-    update_material
+    update_material,
+    save_project_version
 )
 
 urlpatterns = [
@@ -26,9 +27,6 @@ urlpatterns = [
     path('auth/reset-password/', reset_password, name='reset_password'),
     path('auth/profile/', get_user_profile, name='get_user_profile'),
     path('auth/profile/update/', update_user_profile, name='update_user_profile'),
-
-    # Model processing
-    path('models/evaluate/', evaluate_3d_model, name='evaluate_3d_model'),
     
     # Materials
     path('materials/classifications/', get_material_classifications, name='get_material_classifications'),
@@ -38,4 +36,10 @@ urlpatterns = [
     path('materials/<int:material_id>/deactivate/', deactivate_material, name='deactivate_material'),
     path('materials/<int:material_id>/update/', update_material, name='update_material'),
     path('materials/<int:user_id>/', get_user_materials, name='get_user_materials'),
+
+    # Model processing
+    path('models/evaluate/', evaluate_3d_model, name='evaluate_3d_model'),
+
+    # Projects & Versions
+    path('projects/save-version/', save_project_version, name='save_project_version'),
 ]
