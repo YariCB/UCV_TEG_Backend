@@ -202,22 +202,24 @@ def analyze_model_submeshes(filename=""):
     scene_scale = unit_settings.scale_length
 
     # Extracción de la extensión del archivo
-    _, ext = os.path.splitext(filename.lower())
+    ext_tuple = os.path.splitext(filename.lower())
+    file_ext = ext_tuple[1] if len(ext_tuple) > 1 else ""
 
     mesh_objects = [obj for obj in scene.objects if obj.type == 'MESH']
-
     needs_millimeters_fix = False
+    
     if mesh_objects:
         first_obj = mesh_objects[0]
         first_eval = first_obj.evaluated_get(depsgraph)
         first_mesh = first_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
         dim_x, dim_y, dim_z = get_mesh_local_dimensions(first_mesh)
         max_dim = max(dim_x, dim_y, dim_z)
-
-        # HEURÍSTICA: Si el modelo mide más de 50 "metros" virtuales y la escala de escena es 1.0,
-        # probablemente fue exportado en milímetros y se está interpretando como metros.
-        if max_dim > 50.0 and scene_scale == 1.0:
+        
+        # Si el archivo es un STL, se asumime por estándar de impresión 3D que viene en mm
+        # Si es otro formato, se delega en el umbral heurístico mayor a 50 unidades
+        if file_ext == '.stl' or (max_dim > 50.0 and scene_scale == 1.0):
             needs_millimeters_fix = True
+            
         if first_mesh:
             first_eval.to_mesh_clear()
 
@@ -356,6 +358,108 @@ def ground_all_mesh_objects():
             bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
 
 
+# Funciones para manejo de objetos más grandes que la cama de la impresora 3D
+
+# Corte destructivo de un objeto utilizando un plano bisector y sellado 
+# de aristas para mantener mallas cerradas
+# plane_co: Coordenadas del plano
+# plane_no: Normal del plano
+# clear_outer: Si True, elimina la parte del objeto que queda fuera del plano
+# clear_inner: Si True, elimina la parte del objeto que queda dentro del plano
+def bisect_object(obj, plane_co, plane_no, clear_outer, clear_inner):
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+
+    # Transformación del plano del espacio global al espacio de objeto
+    matrix_inv = obj.matrix_world.inverted()
+    local_plane_co = matrix_inv @ plane_co
+    local_plane_no = (matrix_inv.to_3x3().transposed() @ plane_no).normalized()
+
+    geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+
+    # Operador topológico de bisección
+    bmesh.ops.bisect(
+        bm,
+        geom=geom,
+        plane_co=local_plane_co,
+        plane_no=local_plane_no,
+        clear_outer=clear_outer,
+        clear_inner=clear_inner,
+        use_snap_mesh=False,
+    )
+
+    # Capping (localización de aristas abiertas tras el corte y rellenarlas)
+    open_edges = [e for e in bm.edges if not e.is_manifold]
+    if open_edges:
+        try:
+            bmesh.ops.edgeloop_fill(bm, edges=open_edges)
+        except Exception:
+            pass # Si la topología es demasiado compleja
+
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+
+
+# Función para cortar mallas secuencialmente en X e Y hasta que
+# todas las piezas individuales quepan en las dimensiones de la cama
+def auto_slice_objects_for_printing(max_size_cm=22.0, needs_millimeters_fix=False):
+    scene = bpy.context.scene
+    scale_factor = 0.1 if needs_millimeters_fix else (scene.unit_settings.scale_length * 100.0)
+    max_size_bu = max_size_cm / scale_factor
+
+    # Procesamiento de ejes X (0) e Y (1) consecutivamente
+    for axis_idx in [0, 1]:
+        plane_no = mathutils.Vector((1.0 if axis_idx == 0 else 0.0, 1.0 if axis_idx == 1 else 0.0, 0.0))
+
+        objects_to_process = [obj for obj in scene.objects if obj.type == 'MESH']
+
+        while objects_to_process:
+            obj = objects_to_process.pop(0)
+
+            # Consolidación de transformaciones para lectura de la bbox en espacio global
+            bpy.ops.object.select_all(action='DESELECT')
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
+            bbox = obj.bound_box
+            min_val = min(v[axis_idx] for v in bbox)
+            max_val = max(v[axis_idx] for v in bbox)
+            size = max_val - min_val
+
+            # Tolerancia de punto flotante para evitar cortes innecesarios
+            if size > (max_size_bu + 1e-4):
+                cut_val = min_val + max_size_bu
+                plane_co = mathutils.Vector((0.0, 0.0, 0.0))
+                plane_co[axis_idx] = cut_val
+
+                # Duplicación del objeto para preservar la otra sección
+                bpy.ops.object.select_all(action='DESELECT')
+                obj.select_set(True)
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.object.duplicate()
+                obj_part2 = bpy.context.active_object
+                obj_part2.name = f"{obj.name}_part2"
+
+                # Cortes complementarios
+                bisect_object(obj, plane_co, plane_no, clear_outer=True, clear_inner=False)
+                bisect_object(obj_part2, plane_co, plane_no, clear_outer=False, clear_inner=True)
+
+                # Evaluación y limpieza de remanentes vacíos
+                for part in [obj, obj_part2]:
+                    if len(part.data.vertices) == 0 or len(part.data.faces) == 0:
+                        bpy.ops.object.select_all(action='DESELECT')
+                        part.select_set(True)
+                        bpy.ops.object.delete()
+                    else:
+                        # Re-encolar la pieza resultante si aún requiere cortes
+                        if part not in objects_to_process:
+                            objects_to_process.append(part)
+
+
 
 # Función principal con la lógica secuencial del pipeline
 
@@ -381,11 +485,24 @@ def main(args):
             stl_output_path = f"{base_output_path}.stl"
             try:
                 stl_output_path = os.path.abspath(stl_output_path)
+
+                # Verificación de dimensiones y necesidad de segmentación de pieza
+                sys.stdout.write("[Blender] Ejecución de análisis de dimensiones para segmentación automática (Límite: 22x22 cm)... \n")
+                print("[Blender] Ejecución de análisis de dimensiones para segmentación automática (Límite: 22x22 cm)... \n", flush=True)
+                auto_slice_objects_for_printing(max_size_cm=22.0, needs_millimeters_fix=needs_millimeters_fix)
+
                 ground_all_mesh_objects()
                 export_stl(stl_output_path, scale=export_scale)
                 sys.stdout.write(f"[Blender] Gemelo STL generado con éxito en: {stl_output_path}\n")
+                print(f"[Blender] Gemelo STL generado con éxito en: {stl_output_path}\n", flush=True)
+
+                # Actualización de datos para reporte final JSON
+                submeshes_detail, needs_millimeters_fix = analyze_model_submeshes(args.filename or args.input)
+                submesh_count = len(submeshes_detail)
+            
             except Exception as e:
                 sys.stderr.write(f"[Blender] Error exportando STL para laminación: {str(e)}\n")
+                print(f"[Blender] Error exportando STL para laminación: {str(e)}\n", flush=True)
                 stl_output_path = None
 
 
