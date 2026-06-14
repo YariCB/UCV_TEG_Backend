@@ -1042,6 +1042,7 @@ def evaluate_3d_model(request):
         'submeshCount': submesh_count,
         'submeshes': submeshes_detail,
         'originalName': uploaded_file.name,
+        'gbbox': report.get('global_bbox', {'x': 0, 'y': 0, 'z': 0}),
     }
 
     # Despacho de URLs estáticas públicas para renderizado con Three.js

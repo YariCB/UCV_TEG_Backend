@@ -5,6 +5,7 @@ import sys
 import traceback
 import importlib
 import addon_utils
+import mathutils
 import bpy # API de Blender Python, disponible dentro del entorno ejecutor de Blender
 import bmesh # Módulo de Blender para manipulación de mallas, parte de la API bpy
 
@@ -388,8 +389,39 @@ def main(args):
                 stl_output_path = None
 
 
+    # Datos de bounding box global enlazados al espacio métrico local
+    
+    global_corners = []
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH':
+            loc, rot, _ = obj.matrix_world.decompose()
+            # Nueva matriz de transformación con escala neutra (1.0, 1.0, 1.0)
+            matrix_no_scale = mathutils.Matrix.Translation(loc) @ rot.to_matrix().to_4x4()
+            # Esquinas multiplicadas por la matriz sin escala deformada del importador
+            for corner in obj.bound_box:
+                global_corners.append(matrix_no_scale @ mathutils.Vector(corner))
+
+    if global_corners:
+        # Tamaño bruto en el espacio tridimensional uniforme
+        raw_x = max(p.x for p in global_corners) - min(p.x for p in global_corners)
+        raw_y = max(p.y for p in global_corners) - min(p.y for p in global_corners)
+        raw_z = max(p.z for p in global_corners) - min(p.z for p in global_corners)
+
+        # Factor de conversión a centímetros
+        factor = 0.1 if needs_millimeters_fix else (bpy.context.scene.unit_settings.scale_length * 100.0)
+
+        global_bbox = {
+            'x': round(raw_x * factor, 2),
+            'y': round(raw_y * factor, 2),
+            'z': round(raw_z * factor, 2)
+        }
+    else:
+        global_bbox = {'x': 0, 'y': 0, 'z': 0}
+
+
     # Generación del reporte final de sincronización de datos con Django
     write_report(args.report, {
+        'global_bbox': global_bbox,
         'submesh_count': submesh_count,
         'submeshes': submeshes_detail,
         'exported': exported,
