@@ -817,16 +817,11 @@ def _slice_with_prusa(stl_path, scale_factor=1.0):
 
         # Verificación estricta de la existencia del archivo generado
         actual_gcode_path = base_gcode_path
-        if not os.path.exists(actual_gcode_path):
-            # Búsqueda de emergencia en la carpeta por si mutó el nombre
-            found_gcodes = glob.glob(os.path.join(project_folder, "*.gcode"))
-            if found_gcodes:
-                actual_gcode_path = found_gcodes[0]
-            else:
-                return {
-                    'success': False,
-                    'error': f"El motor no generó bloques válidos. Log: {result.stdout or result.stderr}"
-                }
+        if not os.path.exists(actual_gcode_path) or os.path.getsize(actual_gcode_path) == 0:
+            return {
+                'success': False,
+                'error': f"El motor de laminación no generó el archivo esperado. El modelo podría exceder el volumen de impresión. Log: {result.stdout or result.stderr}"
+            }
 
         # Inicialización de variables de métricas
         printing_time_min = "Desconocido"
