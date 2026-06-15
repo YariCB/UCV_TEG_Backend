@@ -192,6 +192,54 @@ def get_mesh_local_dimensions(mesh):
     return max_x - min_x, max_y - min_y, max_z - min_z
 
 
+# Verificación de errores en mallas para determinar necesidad de reparaciones
+def check_mesh_needs_repair(obj):
+    if obj.type != 'MESH':
+        return False
+        
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    
+    # Bordes abiertos (aristas que pertenecen a una sola cara)
+    has_open_edges = any(e.is_boundary for e in bm.edges)
+    # No-manifold (aristas compartidas por 0 o más de 2 caras)
+    has_non_manifold = any(not e.is_manifold for e in bm.edges)
+    
+    bm.free()
+    return has_open_edges or has_non_manifold
+
+
+# Limpieza y reparación de mallas para corregir problemas de
+# mallas abiertas y normales invertidas que puedan afectar cálculos
+def clean_and_repair_mesh(obj):
+
+    if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+
+    # Aplicación de escala y rotación
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+
+    # Modo edición para aplicar herramientas de malla
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+
+    # Eliminación de vértices duplicados o colapsados
+    bpy.ops.mesh.remove_doubles(threshold=0.0001)
+
+    # Recálculo de normales hacia afuera
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+
+    # Sellado de agujeros abiertos
+    bpy.ops.mesh.fill_holes(sides=0)
+
+    # Retorno seguro a modo Objeto
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
 def analyze_model_submeshes(filename=""):
     submeshes_info = []
     scene = bpy.context.scene
@@ -201,27 +249,43 @@ def analyze_model_submeshes(filename=""):
     # Detección del factor de escala de la escena
     scene_scale = unit_settings.scale_length
 
+    mesh_objects = [obj for obj in scene.objects if obj.type == 'MESH']
+
+    # Reparación geométrica
+    if parsed_args.for_3d_printing:
+        print(f"[Backend] Evaluando estado geométrico de {len(mesh_objects)} objetos...", flush=True)
+        for obj in mesh_objects:
+            if check_mesh_needs_repair(obj):
+                print(f"[Backend] Iniciando pase de saneamiento geométrico en '{obj.name}'...", flush=True)
+                try:
+                    clean_and_repair_mesh(obj)
+                except Exception as e:
+                    print(f"[Backend Warning] No se pudo reparar automáticamente el objeto {obj.name}: {str(e)}", flush=True)
+            else:
+                print(f"-> El objeto '{obj.name}' cuenta con una malla cerrada y sana. Se omite la limpieza.")
+
     # Extracción de la extensión del archivo
     ext_tuple = os.path.splitext(filename.lower())
     file_ext = ext_tuple[1] if len(ext_tuple) > 1 else ""
-
-    mesh_objects = [obj for obj in scene.objects if obj.type == 'MESH']
     needs_millimeters_fix = False
     
     if mesh_objects:
-        first_obj = mesh_objects[0]
-        first_eval = first_obj.evaluated_get(depsgraph)
-        first_mesh = first_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
-        dim_x, dim_y, dim_z = get_mesh_local_dimensions(first_mesh)
-        max_dim = max(dim_x, dim_y, dim_z)
+        max_dim_global = 0.0
+        for obj in mesh_objects:
+            obj_eval = obj.evaluated_get(depsgraph)
+            obj_mesh = obj_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+            dim_x, dim_y, dim_z = get_mesh_local_dimensions(obj_mesh)
+            max_dim_global = max(max_dim_global, dim_x, dim_y, dim_z)
+            obj_eval.to_mesh_clear()
         
-        # Si el archivo es un STL, se asumime por estándar de impresión 3D que viene en mm
-        # Si es otro formato, se delega en el umbral heurístico mayor a 50 unidades
-        if file_ext == '.stl' or (max_dim > 50.0 and scene_scale == 1.0):
+        # Si es un STL (siempre mm en impresión 3D) o si el conjunto completo supera las 50 unidades
+        if file_ext == '.stl' or (max_dim_global > 50.0 and scene_scale == 1.0):
             needs_millimeters_fix = True
             
-        if first_mesh:
-            first_eval.to_mesh_clear()
+        # Si el archivo es un STL, se asumime por estándar de impresión 3D que viene en mm
+        # Si es otro formato, se delega en el umbral heurístico mayor a 50 unidades
+        if not needs_millimeters_fix and max_dim_global > 25.0:
+            print(f"[Backend Warning] Objeto detectado con dimensión máxima de {max_dim_global} unidades sin fix de mm. Podría causar un bucle de corte extenso.", flush=True)
 
     def to_cm(value):
         if needs_millimeters_fix:
