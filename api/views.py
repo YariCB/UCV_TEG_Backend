@@ -18,6 +18,7 @@ from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 from .emails import build_welcome_email, build_reset_email
+from psycopg2.extras import RealDictCursor
 logger = logging.getLogger(__name__)
 
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
@@ -1105,21 +1106,197 @@ def save_project_version(request):
             print(f"----- Datos de la Versión ----- \n{json.dumps(version_record, indent=2, ensure_ascii=False)}\n")
 
 
-            # Lógica de guardado en la BD (POR IMPLEMENTAR)
+            # Guardado en la BD
 
-            # Caso 1: Si isDraft == True
-            # os.remove(ruta_anterior) para eliminar el volumen de Docker que quedó obsoleto
-            # Hacer UPDATE en la BD para actualizar el registro del borrador
-            # Si no existe borrador previo, hacer insert y guardarlo como un borrador nuevo
+            project_id = project_record.get('projectId')
+            version_number = version_record.get('versionnumber')
 
-            # Caso 2: Si isDraft == False
-            # Buscar el borrador actual y hacer update para marcarlo como consolidado (isDraft = False)
+            project_date = datetime.strptime(project_record.get('createdAt').replace('T', ' ').replace('Z', '')[:19], '%Y-%m-%d %H:%M:%S') if project_record.get('createdAt') else datetime.now()
+            version_date = datetime.strptime(version_record.get('createdAt').replace('T', ' ').replace('Z', '')[:19], '%Y-%m-%d %H:%M:%S') if version_record.get('createdAt') else datetime.now()
 
-            return JsonResponse({
-                'success': True,
-                'message': 'Datos recibidos correctamente.',
-                'processedAsDraft': is_draft
-            }, status=200)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            try:
+
+                # 1) Registro del Proyecto
+                # Exclude para identificar registros con la misma PK y realizar update de encontrarlos
+                cursor.execute("""
+                    INSERT INTO teg_oltp.project (projectid, userid, projectname, createdat, is3dprinting, isactive)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (projectid) 
+                    DO UPDATE SET projectname = EXCLUDED.projectname, isactive = EXCLUDED.isactive;
+                """,(
+                    project_id, 
+                    project_record.get('userId'),
+                    project_record.get('projectName'),
+                    project_date,
+                    project_record.get('is3Dprinting'),
+                    project_record.get('isActive', True)
+                ))
+
+                # 2) Manejo de Versión y Control de Volumen de Docker
+                if is_draft:
+                    # CASO 1: Guardado temporal (Borrador activo)
+
+                    # Búsqueda de existencia de archivo previo para este borrador
+                    cursor.execute("""
+                        SELECT object3durl FROM teg_oltp.projectversion 
+                        WHERE projectid = ? AND isdraft = TRUE
+                        ORDER BY createdat DESC LIMIT 1;
+                    """, (project_id,))
+                    old_version_row = cursor.fetchone()
+
+                    if old_version_row and old_version_row[0]:
+                        old_url = old_version_row[0]
+                        if settings.MEDIA_URL in old_url:
+                            relative_path = old_url.split(settings.MEDIA_URL)[-1]
+                            absolute_old_path = Path(settings.MEDIA_ROOT) / relative_path
+                            # Eliminación segura del archivo del modelo obsoleto en Docker
+                            if absolute_old_path.exists() and absolute_old_path.is_file():
+                                try:
+                                    os.remove(absolute_old_path)
+                                    logger.info(f"[Transacción] Archivo de borrador antiguo eliminado: {absolute_old_path.name}")
+                                    
+                                    # Limpieza de subproductos .report.json, .glb y .gcode asociados
+                                    base_old_str = str(absolute_old_path.with_suffix(''))
+                                    for residual in [base_old_str + "_report.json", base_old_str + ".glb", base_old_str + ".gcode"]:
+                                        if os.path.exists(residual):
+                                            os.remove(residual)
+                                except Exception as e:
+                                    logger.error(f"Error al remover archivo del volumen: {str(e)}")
+                    
+                    # Limpieza de submallados y asignaciones previas del borrador para evitar duplicidad de geometrías
+                    cursor.execute("""
+                        DELETE FROM teg_oltp.materialassignment 
+                        WHERE submeshid IN (
+                                   SELECT submeshid
+                                   FROM teg_oltp.submesh
+                                   WHERE projectid = ?);
+                    """, (project_id,))
+                    
+                    cursor.execute("""
+                                   DELETE FROM teg_oltp.submesh
+                                   WHERE projectid = ?
+                                   """, (project_id,))
+
+                    cursor.execute("""
+                                   DELETE FROM teg_oltp.projectversion
+                                   WHERE projectid = ? AND isdraft = TRUE;
+                                   """, (project_id,))
+
+                    # Definimos el número de versión final para la query (Borrador mantiene v1.0, v2.0 base)
+                    final_version_number = version_number
+                
+                else:
+                    # CASO 2: Guardado del borrador en una versión consolidada
+
+                    # Utilización de la versión calculada en el frontend
+                    final_version_number = version_number
+
+                    # Limpiamos el borrador previo de este proyecto (si existía) para cerrar el ciclo de edición
+                    cursor.execute("""
+                        DELETE FROM teg_oltp.materialassignment 
+                        WHERE submeshid IN (
+                                   SELECT submeshid
+                                   FROM teg_oltp.submesh
+                                   WHERE projectid = ?);
+                    """, (project_id,))
+                    
+                    cursor.execute("""
+                                   DELETE FROM teg_oltp.submesh
+                                   WHERE projectid = ?
+                                   """, (project_id,))
+
+                    cursor.execute("""
+                                   DELETE FROM teg_oltp.projectversion
+                                   WHERE projectid = ? AND isdraft = TRUE;
+                                   """, (project_id,))
+            
+                # Registro de la Versión calculada
+                cursor.execute("""
+                        INSERT INTO teg_oltp.projectversion (
+                            projectid, versionnumber, object3durl, costsnapshot_usd, 
+                            createdat, estimatedweight_g, printingtime_min, 
+                            gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """, (
+                        project_id,
+                        final_version_number,
+                        version_record.get('object3durl'),
+                        version_record.get('costsnapshot_usd'),
+                        version_date,
+                        version_record.get('estimatedweight_g'),
+                        version_record.get('printingtime_min'),
+                        version_record.get('gbboxwidth_x'),
+                        version_record.get('gbboxheight_y'),
+                        version_record.get('gbboxdepth_z'),
+                        is_draft
+                    ))
+                
+                # 3) Registro de Submallados
+                for submesh in submesh_records:
+                    cursor.execute("""
+                        INSERT INTO teg_oltp.submesh (
+                            projectid, submeshname, volume_cm3, area_cm2, 
+                            bboxwidth_x, bboxheight_y, bboxdepth_z
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        RETURNING submeshid;
+                    """, (
+                        project_id,
+                        submesh.get('submeshName'),
+                        submesh.get('volume_cm3'),
+                        submesh.get('area_cm2'),
+                        submesh.get('bboxwidth_x'),
+                        submesh.get('bboxheight_y'),
+                        submesh.get('bboxdepth_z')
+                    ))
+
+                    # Captura del identity
+                    generated_submesh_id = cursor.fetchone()[0]
+
+                    # 4) Registro de Asignación de Materiales a Submallados
+                    matching_assignments = [
+                        mat for mat in material_assignment_records
+                        if mat.get('submeshname') == submesh.get('submeshname') or str(mat.get('submesh_index')) == str(submesh.get('mesh_index'))
+                    ]
+
+                    for assignment in matching_assignments:
+                        cursor.execute("""
+                            INSERT INTO teg_oltp.materialassignment (
+                                submeshid, materialid, appliedunitprice_usd, 
+                                submeshcost_usd, estimatedweight_g
+                            ) VALUES (?, ?, ?, ?, ?);
+                        """, (
+                            generated_submesh_id,
+                            assignment.get('materialId'),
+                            assignment.get('appliedUnitPrice'),
+                            assignment.get('submeshCost_usd'),
+                            assignment.get('estimatedWeight_g')
+                        ))
+                
+                # Commit de la transacción
+                conn.commit()
+                logger.info(f"[Transacción Exitosa] Proyecto {project_id} guardado. Versión asignada: {final_version_number}")
+
+                return JsonResponse({
+                    'success': True,
+                    'message': f'Versión {final_version_number} guardada exitosamente.',
+                    'processedAsDraft': is_draft,
+                    'validatedVersionLabel': final_version_number
+                }, status=200)
+            
+            
+            except Exception as tx_error:
+                # Rollback en caso de error
+                conn.rollback()
+                logger.error(f"[Transacción Abortada] Rollback ejecutado debido a: {str(tx_error)}")
+                return JsonResponse({'error': f'Error en la transacción SQL: {str(tx_error)}'}, status=500)
+            
+            finally:
+                # Liberación de recursos del poll de PostgreSQL
+                cursor.close()
+                conn.close()
         
         except json.JSONDecodeError:
             logger.error("Error al decodificar JSON en save_project_version")
