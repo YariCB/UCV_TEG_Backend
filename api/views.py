@@ -1104,6 +1104,17 @@ def save_project_version(request):
             print(f"----- Datos de Asignación de Materiales ({len(material_assignment_records)}) ----- \n{json.dumps(material_assignment_records, indent=2, ensure_ascii=False)}")
             print(f"----- Datos de la Versión ----- \n{json.dumps(version_record, indent=2, ensure_ascii=False)}\n")
 
+
+            # Lógica de guardado en la BD (POR IMPLEMENTAR)
+
+            # Caso 1: Si isDraft == True
+            # os.remove(ruta_anterior) para eliminar el volumen de Docker que quedó obsoleto
+            # Hacer UPDATE en la BD para actualizar el registro del borrador
+            # Si no existe borrador previo, hacer insert y guardarlo como un borrador nuevo
+
+            # Caso 2: Si isDraft == False
+            # Buscar el borrador actual y hacer update para marcarlo como consolidado (isDraft = False)
+
             return JsonResponse({
                 'success': True,
                 'message': 'Datos recibidos correctamente.',
