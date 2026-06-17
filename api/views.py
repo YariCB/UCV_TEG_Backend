@@ -1498,9 +1498,10 @@ def get_user_projects_count(request, user_id):
         cursor = conn.cursor()
         
         count_query = """
-            SELECT COUNT(projectid) 
-            FROM teg_oltp.project 
-            WHERE userid = ? AND isactive = true;
+            SELECT COUNT(P.projectid) 
+            FROM teg_oltp.project P
+            JOIN teg_oltp.projectversion PV ON P.projectid = PV.projectid
+            WHERE userid = ? AND isactive = true AND isDraft = false;
         """
         cursor.execute(count_query, (user_id,))
         result = cursor.fetchone()
@@ -1530,18 +1531,18 @@ def deactivate_project(request, project_id):
         
     try:
         cursor = conn.cursor()
+        
+        update_query = """
+            UPDATE teg_oltp.project
+            SET isactive = false
+            WHERE projectid = ?;
+        """        
+        cursor.execute(update_query, (project_id,))
 
         # Verificación de existencia del proyecto
         if cursor.rowcount == 0:
             return JsonResponse({'error': 'El proyecto no fue encontrado'}, status=404)
         
-        update_query = """
-            UPDATE teg_oltp.prproject
-            SET isactive = false
-            WHERE projectid = ?;
-        """
-        
-        cursor.execute(update_query, (project_id,))
         conn.commit()
             
         logger.info(f"[Proyecto Desactivado] ID: {project_id} marcado como inactivo.")
@@ -1554,5 +1555,3 @@ def deactivate_project(request, project_id):
     finally:
         cursor.close()
         conn.close()
-
-
