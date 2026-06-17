@@ -1334,16 +1334,23 @@ def get_user_projects(request, user_id):
     try:
         cursor = conn.cursor()
         
-        # Proyectos activos del usuario
-        project_query = """
+        # Lectura de si el frontend pide un límite (para resultados de proyectos recientes)
+        limit_param = request.GET.get('limit')
+        limit_clause = ""
+        if limit_param and limit_param.isdigit():
+            limit_clause = f" LIMIT {int(limit_param)}"
+
+        project_query = f"""
             SELECT DISTINCT P.projectid, P.userid, P.projectname, P.createdat, P.is3dprinting, P.isactive
             FROM teg_oltp.project P
             JOIN teg_oltp.projectversion PV ON P.projectid = PV.projectid
             WHERE P.userid = ? AND P.isactive = true AND PV.isdraft = false
-            ORDER BY P.createdat DESC;
+            ORDER BY P.createdat DESC{limit_clause};
         """
         cursor.execute(project_query, (user_id,))
         projects = cursor.fetchall()
+        
+        # ... El resto de tu función queda EXACTAMENTE IGUAL a como la tienes ...
         
         print(f"[+] Proyectos totales activos encontrados en BD para este usuario: {len(projects)}")
         
@@ -1480,6 +1487,37 @@ def get_user_projects(request, user_id):
         conn.close()
 
 
+# Conteo de proyectos totales para un usuario
+def get_user_projects_count(request, user_id):
+    conn = get_db_connection()
+    if conn is None:
+        print("[-] Error: No se pudo establecer conexión con la base de datos.")
+        return JsonResponse({'error': 'No se pudo conectar a la base de datos'}, status=500)
+    
+    try:
+        cursor = conn.cursor()
+        
+        count_query = """
+            SELECT COUNT(projectid) 
+            FROM teg_oltp.project 
+            WHERE userid = ? AND isactive = true;
+        """
+        cursor.execute(count_query, (user_id,))
+        result = cursor.fetchone()
+        total_projects = result[0] if result else 0
+        
+        print(f"[+] Conteo total de proyectos activos: {total_projects}")
+        
+        return JsonResponse({'total_projects': total_projects}, status=200)
+        
+    except Exception as e:
+        print(f"[-] ERROR CRÍTICO en get_user_projects_count: {str(e)}")
+        return JsonResponse({'error': f"Error en el servidor: {str(e)}"}, status=500)
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # Eliminación lógica (desactivación) de proyectos
 @csrf_exempt
 def deactivate_project(request, project_id):
@@ -1516,3 +1554,5 @@ def deactivate_project(request, project_id):
     finally:
         cursor.close()
         conn.close()
+
+
