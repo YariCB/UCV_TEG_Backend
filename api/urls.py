@@ -15,7 +15,9 @@ from .views import(
     get_user_materials,
     deactivate_material,
     update_material,
-    save_project_version
+    save_project_version,
+    get_user_projects,
+    deactivate_project
 )
 
 urlpatterns = [
@@ -42,4 +44,6 @@ urlpatterns = [
 
     # Projects & Versions
     path('projects/save-version/', save_project_version, name='save_project_version'),
+    path('projects/user/<int:user_id>/', get_user_projects, name='get_user_projects'),
+    path('projects/deactivate/<int:project_id>/', deactivate_project, name='deactivate_project'),
 ]

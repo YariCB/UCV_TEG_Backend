@@ -18,7 +18,6 @@ from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 from .emails import build_welcome_email, build_reset_email
-from psycopg2.extras import RealDictCursor
 logger = logging.getLogger(__name__)
 
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
@@ -1307,3 +1306,194 @@ def save_project_version(request):
             return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
     
     return JsonResponse({'error': 'Método no permitido. Use POST'}, status=405)
+
+
+# Obtención de proyectos de un usuario
+
+def get_user_projects(request, user_id):
+    print(f"\n===== [INICIO] get_user_projects para user_id: {user_id} =====")
+    conn = get_db_connection()
+    if conn is None:
+        print("[-] Error: No se pudo establecer conexión con la base de datos.")
+        return JsonResponse({'error': 'No se pudo conectar a la base de datos'}, status=500)
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Proyectos activos del usuario
+        project_query = """
+            SELECT DISTINCT P.projectid, P.userid, P.projectname, P.createdat, P.is3dprinting, P.isactive
+            FROM teg_oltp.project P
+            JOIN teg_oltp.projectversion PV ON P.projectid = PV.projectid
+            WHERE P.userid = ? AND P.isactive = true AND PV.isdraft = false
+            ORDER BY P.createdat DESC;
+        """
+        cursor.execute(project_query, (user_id,))
+        projects = cursor.fetchall()
+        
+        print(f"[+] Proyectos totales activos encontrados en BD para este usuario: {len(projects)}")
+        
+        response_data = []
+        
+        for proj in projects:
+            p_id = proj[0]
+            p_name = proj[2]
+            is_3d_printing_bool = proj[4] in (True, 1, '1') or str(proj[4]).lower() == 'true'
+            
+            print(f"--> Procesando Proyecto ID: {p_id} | Nombre: '{p_name}'")
+            
+            # Versiones del proyecto
+            version_query = """
+                SELECT versionnumber, object3durl, costsnapshot_usd, createdat, 
+                       estimatedweight_g, printingtime_min, gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
+                FROM teg_oltp.projectversion
+                WHERE projectid = ?
+                ORDER BY createdat ASC;
+            """
+            cursor.execute(version_query, (p_id,))
+            versions = cursor.fetchall()
+            
+            # Verificación de versiones consolidadas
+            has_published_version = any(ver[9] == '0' or ver[9] is False or ver[9] == 0 for ver in versions)
+            
+            if not has_published_version:
+                continue 
+            
+            # Submallados del proyecto
+            submesh_query = """
+                SELECT submeshid, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                FROM teg_oltp.submesh
+                WHERE projectid = ?;
+            """
+            cursor.execute(submesh_query, (p_id,))
+            submeshes = cursor.fetchall()
+            
+            # Estructuras de submallados
+            formatted_submeshes = []
+            for sub in submeshes:
+                s_id = sub[0]
+                
+                assignment_query = """
+                    SELECT MA.materialid, MA.appliedunitprice_usd, MA.submeshcost_usd, MA.estimatedweight_g,
+                           M.name, C.name
+                    FROM teg_oltp.materialassignment MA
+                    JOIN teg_oltp.material M ON MA.materialid = M.materialid
+                    JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
+                    WHERE MA.submeshid = ?;
+                """
+                cursor.execute(assignment_query, (s_id,))
+                assignments = cursor.fetchall()
+                
+                material_data = None
+                if assignments:
+                    first_assign = assignments[0]
+                    material_data = {
+                        'id': first_assign[0],
+                        'name': first_assign[4],
+                        'category': first_assign[5],
+                        'pricePerCm3': float(first_assign[1]) if first_assign[1] else 0.0
+                    }
+                
+                formatted_submeshes.append({
+                    'id': f"submesh-{s_id}",
+                    'name': sub[1],
+                    'volumeCm3': float(sub[2]) if sub[2] else 0.0,
+                    'areaCm2': float(sub[3]) if sub[3] else 0.0,
+                    'material': material_data
+                })
+            
+            # Estructura de versiones del proyecto
+            formatted_versions = []
+            latest_object_url = None
+            latest_version_label = "v1.0"
+            
+            for ver in versions:
+                v_url = ver[1]
+                
+                try:
+                    v_num = float(ver[0])
+                    v_label = f"v{v_num:.1f}"
+                except (ValueError, TypeError):
+                    v_label = f"v{ver[0]}"
+                
+                # Guardado de los datos de la última versión válida procesada para la raíz
+                latest_object_url = v_url
+                latest_version_label = v_label
+                
+                is_draft_bool = not (ver[9] == '0' or ver[9] is False or ver[9] == 0)
+                
+                formatted_versions.append({
+                    'id': f"ver-{p_id}-{ver[0]}",
+                    'label': v_label, # Ahora es un string seguro "v1.0"
+                    'fileName': v_url.split('/')[-1] if v_url else 'modelo.glb',
+                    'object3dUrl': v_url,
+                    'for3dPrinting': is_3d_printing_bool,
+                    'isDraft': is_draft_bool,
+                    'costSnapshot': float(ver[2]) if ver[2] else 0.0,
+                    'submeshes': formatted_submeshes
+                })
+            
+            # Formato de la fecha del proyecto
+            raw_date = proj[3]
+            formatted_date = raw_date.strftime('%d %b %Y') if hasattr(raw_date, 'strftime') else str(raw_date)
+            
+            # Respuesta final
+            response_data.append({
+                'id': p_id,
+                'name': p_name,
+                'date': formatted_date,
+                'status': 'Completado',
+                'is3dprinting': is_3d_printing_bool,
+                'object3dUrl': latest_object_url,
+                'version': latest_version_label,
+                'versions': formatted_versions
+            })
+            print(f"    [OK] Proyecto '{p_name}' mapeado con preview y versión string ({latest_version_label}).")
+            
+        print(f"===== [FIN] get_user_projects. Enviando {len(response_data)} proyectos al frontend. =====\n")
+        return JsonResponse(response_data, safe=False, status=200)
+        
+    except Exception as e:
+        print(f"[-] ERROR CRÍTICO en get_user_projects: {str(e)}")
+        return JsonResponse({'error': f"Error en el servidor: {str(e)}"}, status=500)
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# Eliminación lógica (desactivación) de proyectos
+@csrf_exempt
+def deactivate_project(request, project_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido. Use POST'}, status=405)
+        
+    conn = get_db_connection()
+    if conn is None:
+        return JsonResponse({'error': 'No se pudo conectar a la base de datos'}, status=500)
+        
+    try:
+        cursor = conn.cursor()
+        
+        update_query = """
+            UPDATE teg_oltp.project
+            SET isactive = false
+            WHERE projectid = ?;
+        """
+        
+        cursor.execute(update_query, (project_id,))
+        conn.commit()
+        
+        # Verificación de existencia del proyecto
+        if cursor.rowcount == 0:
+            return JsonResponse({'error': 'El proyecto no fue encontrado'}, status=404)
+            
+        logger.info(f"[Proyecto Desactivado] ID: {project_id} marcado como inactivo.")
+        return JsonResponse({'success': True, 'message': 'Proyecto eliminado exitosamente.'}, status=200)
+        
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error al desactivar el proyecto {project_id}: {str(e)}")
+        return JsonResponse({'error': f"Error en el servidor: {str(e)}"}, status=500)
+    finally:
+        cursor.close()
+        conn.close()
