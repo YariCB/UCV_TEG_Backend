@@ -1399,6 +1399,11 @@ def get_user_projects(request, user_id):
                     'name': sub[1],
                     'volumeCm3': float(sub[2]) if sub[2] else 0.0,
                     'areaCm2': float(sub[3]) if sub[3] else 0.0,
+                    'bbox_cm': {
+                        'width_cm': float(sub[4]) if sub[4] else 0.0, # bboxwidth_x
+                        'length_cm': float(sub[5]) if sub[5] else 0.0, # bboxheight_y
+                        'thickness_cm': float(sub[6]) if sub[6] else 0.0 # bboxdepth_z
+                    },
                     'material': material_data
                 })
             
