@@ -1032,6 +1032,18 @@ def evaluate_3d_model(request):
     submeshes_detail = report.get('submeshes', [])
     allowed = submesh_count <= MAX_SUBMESHES
 
+    # Mantenimiento del nombre original de los submallados
+
+    original_base_name = os.path.splitext(uploaded_file.name)[0]
+    temp_base_name = os.path.splitext(saved_filename)[0]
+    for submesh in submeshes_detail:
+        current_name = submesh.get('submeshname', '')
+        # Si el submallado contiene el prefijo temporal de Docker, se restaura al original
+        if temp_base_name in current_name:
+            submesh['submeshname'] = current_name.replace(temp_base_name, original_base_name)
+        elif current_name == temp_base_name or not current_name:
+            submesh['submeshname'] = original_base_name
+
     response = {
         'allowed': allowed,
         'submeshCount': submesh_count,
@@ -1235,6 +1247,8 @@ def save_project_version(request):
                 
                 # 3) Registro de Submallados
                 for submesh in submesh_records:
+                    print("submeshName: ", submesh.get('submeshName'))
+
                     cursor.execute("""
                         INSERT INTO teg_oltp.submesh (
                             projectid, submeshname, volume_cm3, area_cm2, 
@@ -1478,19 +1492,19 @@ def deactivate_project(request, project_id):
         
     try:
         cursor = conn.cursor()
+
+        # Verificación de existencia del proyecto
+        if cursor.rowcount == 0:
+            return JsonResponse({'error': 'El proyecto no fue encontrado'}, status=404)
         
         update_query = """
-            UPDATE teg_oltp.project
+            UPDATE teg_oltp.prproject
             SET isactive = false
             WHERE projectid = ?;
         """
         
         cursor.execute(update_query, (project_id,))
         conn.commit()
-        
-        # Verificación de existencia del proyecto
-        if cursor.rowcount == 0:
-            return JsonResponse({'error': 'El proyecto no fue encontrado'}, status=404)
             
         logger.info(f"[Proyecto Desactivado] ID: {project_id} marcado como inactivo.")
         return JsonResponse({'success': True, 'message': 'Proyecto eliminado exitosamente.'}, status=200)

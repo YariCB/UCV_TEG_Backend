@@ -45,5 +45,5 @@ urlpatterns = [
     # Projects & Versions
     path('projects/save-version/', save_project_version, name='save_project_version'),
     path('projects/user/<int:user_id>/', get_user_projects, name='get_user_projects'),
-    path('projects/deactivate/<int:project_id>/', deactivate_project, name='deactivate_project'),
+    path('projects/deactivate/<str:project_id>/', deactivate_project, name='deactivate_project'),
 ]
