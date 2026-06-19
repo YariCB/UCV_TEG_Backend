@@ -1095,211 +1095,445 @@ def evaluate_3d_model(request):
 
 # --- PROJECT ---
 
-# Guardado de la versión del proyecto
 @csrf_exempt
 def save_project_version(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
 
-            project_record = data.get('projectRecord', {})
-            submesh_records = data.get('submeshRecords', [])
-            material_assignment_records = data.get('materialAssignmentRecords', [])
-            version_record = data.get('versionRecord', {})
+            project_data = data.get('projectRecord', {})
+            submeshes_data = data.get('submeshRecords', [])
+            materials_data = data.get('materialAssignmentRecords', [])
+            version_data = data.get('versionRecord', {})
 
-            is_draft = version_record.get('isDraft', True)
+            is_draft = version_data.get('isDraft', True)
 
             # Impresiones de Prueba
             print(f"\nGUARDANDO VERSIÓN - ¿Es borrador? {is_draft}")
-            print(f"----- Datos del Proyecto ----- \n{json.dumps(project_record, indent=2, ensure_ascii=False)}")
-            print(f"----- Datos de Submallados ({len(submesh_records)}) ----- \n{json.dumps(submesh_records, indent=2, ensure_ascii=False)}")
-            print(f"----- Datos de Asignación de Materiales ({len(material_assignment_records)}) ----- \n{json.dumps(material_assignment_records, indent=2, ensure_ascii=False)}")
-            print(f"----- Datos de la Versión ----- \n{json.dumps(version_record, indent=2, ensure_ascii=False)}\n")
+            print(f"----- Datos del Proyecto ----- \n{json.dumps(project_data, indent=2, ensure_ascii=False)}")
+            print(f"----- Datos de Submallados ({len(submeshes_data)}) ----- \n{json.dumps(submeshes_data, indent=2, ensure_ascii=False)}")
+            print(f"----- Datos de Asignación de Materiales ({len(materials_data)}) ----- \n{json.dumps(materials_data, indent=2, ensure_ascii=False)}")
+            print(f"----- Datos de la Versión ----- \n{json.dumps(version_data, indent=2, ensure_ascii=False)}\n")
 
 
             # Guardado en la BD
 
-            project_id = project_record.get('projectId')
-            version_number = version_record.get('versionnumber')
-
-            project_date = datetime.strptime(project_record.get('createdAt').replace('T', ' ').replace('Z', '')[:19], '%Y-%m-%d %H:%M:%S') if project_record.get('createdAt') else datetime.now()
-            version_date = datetime.strptime(version_record.get('createdAt').replace('T', ' ').replace('Z', '')[:19], '%Y-%m-%d %H:%M:%S') if version_record.get('createdAt') else datetime.now()
+            project_id = project_data.get('projectId')
+            is_draft_mode = version_data.get('isDraft', True)
+            is_new_file = version_data.get('isNewFile', False)
 
             conn = get_db_connection()
+            conn.autocommit = False
             cursor = conn.cursor()
 
             try:
 
-                # 1) Registro del Proyecto
-                # Exclude para identificar registros con la misma PK y realizar update de encontrarlos
+                # Registro del Proyecto
+                print("""
+                    INSERT INTO teg_oltp.project (projectid, userid, projectname, createdat, is3dprinting, isactive)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (projectid) DO UPDATE
+                    SET projectname = EXCLUDED.projectname,
+                        is3dprinting = EXCLUDED.is3dprinting      
+                """, (project_id,
+                      project_data.get('userId'),
+                      project_data.get('projectName'),
+                      project_data.get('createdAt'),
+                      project_data.get('is3Dprinting'),
+                      project_data.get('isActive', True)
+                ))
                 cursor.execute("""
                     INSERT INTO teg_oltp.project (projectid, userid, projectname, createdat, is3dprinting, isactive)
                     VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (projectid) 
-                    DO UPDATE SET projectname = EXCLUDED.projectname, isactive = EXCLUDED.isactive;
-                """,(
-                    project_id, 
-                    project_record.get('userId'),
-                    project_record.get('projectName'),
-                    project_date,
-                    project_record.get('is3Dprinting'),
-                    project_record.get('isActive', True)
+                    ON CONFLICT (projectid) DO UPDATE
+                    SET projectname = EXCLUDED.projectname,
+                        is3dprinting = EXCLUDED.is3dprinting      
+                """, (project_id,
+                      project_data.get('userId'),
+                      project_data.get('projectName'),
+                      project_data.get('createdAt'),
+                      project_data.get('is3Dprinting'),
+                      project_data.get('isActive', True)
                 ))
 
-                # 2) Manejo de Versión y Control de Volumen de Docker
-                if is_draft:
-                    # CASO 1: Guardado temporal (Borrador activo)
 
-                    # Búsqueda de existencia de archivo previo para este borrador
-                    cursor.execute("""
-                        SELECT object3durl FROM teg_oltp.projectversion 
-                        WHERE projectid = ? AND isdraft = TRUE
-                        ORDER BY createdat DESC LIMIT 1;
+                # Guardado de la versión (isDraft = false)
+                print("is_draft_mode: ", is_draft_mode)
+                if not is_draft_mode:
+                    print("""
+                        UPDATE teg_oltp.projectversion
+                        SET isdraft = False
+                        WHERE projectid = ? AND isdraft = True
                     """, (project_id,))
-                    old_version_row = cursor.fetchone()
-
-                    if old_version_row and old_version_row[0]:
-                        old_url = old_version_row[0]
-                        if settings.MEDIA_URL in old_url:
-                            relative_path = old_url.split(settings.MEDIA_URL)[-1]
-                            absolute_old_path = Path(settings.MEDIA_ROOT) / relative_path
-                            # Eliminación segura del archivo del modelo obsoleto en Docker
-                            if absolute_old_path.exists() and absolute_old_path.is_file():
-                                try:
-                                    os.remove(absolute_old_path)
-                                    logger.info(f"[Transacción] Archivo de borrador antiguo eliminado: {absolute_old_path.name}")
-                                    
-                                    # Limpieza de subproductos .report.json, .glb y .gcode asociados
-                                    base_old_str = str(absolute_old_path.with_suffix(''))
-                                    for residual in [base_old_str + "_report.json", base_old_str + ".glb", base_old_str + ".gcode"]:
-                                        if os.path.exists(residual):
-                                            os.remove(residual)
-                                except Exception as e:
-                                    logger.error(f"Error al remover archivo del volumen: {str(e)}")
-                    
-                    # Limpieza de submallados y asignaciones previas del borrador para evitar duplicidad de geometrías
                     cursor.execute("""
-                        DELETE FROM teg_oltp.materialassignment 
-                        WHERE submeshid IN (
-                                   SELECT submeshid
-                                   FROM teg_oltp.submesh
-                                   WHERE projectid = ?);
+                        UPDATE teg_oltp.projectversion
+                        SET isdraft = False
+                        WHERE projectid = ? AND isdraft = True
                     """, (project_id,))
-                    
-                    cursor.execute("""
-                                   DELETE FROM teg_oltp.submesh
-                                   WHERE projectid = ?
-                                   """, (project_id,))
 
-                    cursor.execute("""
-                                   DELETE FROM teg_oltp.projectversion
-                                   WHERE projectid = ? AND isdraft = TRUE;
-                                   """, (project_id,))
+                    conn.commit()
 
-                    # Definimos el número de versión final para la query (Borrador mantiene v1.0, v2.0 base)
-                    final_version_number = version_number
+                    return JsonResponse({
+                        'success': True,
+                        "message": "Versión final consolidada",
+                        "calculatedVersion": version_data.get('versionnumber')
+                    }, status=200)
+                
+
+                # Estimación de costo de versión (isDraft = True)
+
+                print("""
+                    SELECT versionnumber, isdraft
+                    FROM teg_oltp.projectversion
+                    WHERE projectid = ?
+                    ORDER BY createdat DESC LIMIT 1;
+                """, (project_id, ))
+                cursor.execute("""
+                    SELECT versionnumber, isdraft
+                    FROM teg_oltp.projectversion
+                    WHERE projectid = ?
+                    ORDER BY createdat DESC LIMIT 1;
+                """, (project_id, ))
+                last_version_row = cursor.fetchone()
+                print("last_version_row: ", last_version_row)
+
+                if not last_version_row:
+                    # Se trata de un proyecto nuevo, versión inicial
+                    next_version = 1.0
+                    is_updating_draft = False
+                    last_version_number = None
                 
                 else:
-                    # CASO 2: Guardado del borrador en una versión consolidada
+                    last_version_number = float(last_version_row[0])
+                    raw_is_draft = last_version_row[1]
+                    # Casteo a booleano
+                    last_is_draft = str(raw_is_draft).lower() in ('true', '1', 't', 'y', 'yes')
 
-                    # Utilización de la versión calculada en el frontend
-                    final_version_number = version_number
-
-                    # Limpiamos el borrador previo de este proyecto (si existía) para cerrar el ciclo de edición
-                    cursor.execute("""
-                        DELETE FROM teg_oltp.materialassignment 
-                        WHERE submeshid IN (
-                                   SELECT submeshid
-                                   FROM teg_oltp.submesh
-                                   WHERE projectid = ?);
-                    """, (project_id,))
+                    # Si la versión anterior es borrador, se mantiene el número
+                    if last_is_draft:
+                        next_version = last_version_number
+                        is_updating_draft = True
                     
-                    cursor.execute("""
-                                   DELETE FROM teg_oltp.submesh
-                                   WHERE projectid = ?
-                                   """, (project_id,))
+                    # Si la versión anterior es final, se calcula el incremento
+                    else:
+                        is_updating_draft = False
+                        # Incremento mayor: Hubo carga de nuevo archivo 3D
+                        if is_new_file:
+                            next_version = float(int(last_version_number)+1)
+                        # Incremento menor: Mismo archivo 3D, cambio de materiales
+                        else:
+                            next_version = round(last_version_number + 0.1, 1)
+                    
+                    print("next_version: ", next_version)
+                
+                # Registro de la versión
 
-                    cursor.execute("""
-                                   DELETE FROM teg_oltp.projectversion
-                                   WHERE projectid = ? AND isdraft = TRUE;
-                                   """, (project_id,))
-            
-                # Registro de la Versión calculada
-                cursor.execute("""
-                        INSERT INTO teg_oltp.projectversion (
-                            projectid, versionnumber, object3durl, costsnapshot_usd, 
-                            createdat, estimatedweight_g, printingtime_min, 
-                            gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                # Si se está actualizando el borrador anterior
+                if is_updating_draft:
+                    print("""
+                        UPDATE teg_oltp.projectversion
+                        SET object3durl = ?, costsnapshot_usd = ?, createdat = ?, 
+                            estimatedweight_g = ?, printingtime_min = ?, 
+                            gbboxwidth_x = ?, gbboxheight_y = ?, gbboxdepth_z = ?
+                        WHERE projectid = ? AND versionnumber = ?;
                     """, (
+                        version_data.get('object3durl'),
+                        version_data.get('costsnapshot_usd'),
+                        version_data.get('createdat'),
+                        version_data.get('estimatedweight_g'),
+                        version_data.get('printingtime_min'),
+                        version_data.get('gbboxwidth_x'),
+                        version_data.get('gbboxheight_y'),
+                        version_data.get('gbboxdepth_z'),
                         project_id,
-                        final_version_number,
-                        version_record.get('object3durl'),
-                        version_record.get('costsnapshot_usd'),
-                        version_date,
-                        version_record.get('estimatedweight_g'),
-                        version_record.get('printingtime_min'),
-                        version_record.get('gbboxwidth_x'),
-                        version_record.get('gbboxheight_y'),
-                        version_record.get('gbboxdepth_z'),
-                        is_draft
+                        next_version
+                    ))
+                    cursor.execute("""
+                        UPDATE teg_oltp.projectversion
+                        SET object3durl = ?, costsnapshot_usd = ?, createdat = ?, 
+                            estimatedweight_g = ?, printingtime_min = ?, 
+                            gbboxwidth_x = ?, gbboxheight_y = ?, gbboxdepth_z = ?
+                        WHERE projectid = ? AND versionnumber = ?;
+                    """, (
+                        version_data.get('object3durl'),
+                        version_data.get('costsnapshot_usd'),
+                        version_data.get('createdat'),
+                        version_data.get('estimatedweight_g'),
+                        version_data.get('printingtime_min'),
+                        version_data.get('gbboxwidth_x'),
+                        version_data.get('gbboxheight_y'),
+                        version_data.get('gbboxdepth_z'),
+                        project_id,
+                        next_version
                     ))
                 
-                # 3) Registro de Submallados
-                for submesh in submesh_records:
-                    print("submeshName: ", submesh.get('submeshName'))
-
-                    cursor.execute("""
-                        INSERT INTO teg_oltp.submesh (
-                            projectid, submeshname, volume_cm3, area_cm2, 
-                            bboxwidth_x, bboxheight_y, bboxdepth_z
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        RETURNING submeshid;
+                # Si se está agregando un nuevo borrador
+                else:
+                    print("""
+                        INSERT INTO teg_oltp.projectversion (
+                        projectid, versionnumber, object3durl, costsnapshot_usd, 
+                        createdat, estimatedweight_g, printingtime_min, 
+                        gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, True);
                     """, (
                         project_id,
-                        submesh.get('submeshName'),
-                        submesh.get('volume_cm3'),
-                        submesh.get('area_cm2'),
-                        submesh.get('bboxwidth_x'),
-                        submesh.get('bboxheight_y'),
-                        submesh.get('bboxdepth_z')
+                        next_version,
+                        version_data.get('object3durl'),
+                        version_data.get('costsnapshot_usd'),
+                        version_data.get('createdat'),
+                        version_data.get('estimatedweight_g'),
+                        version_data.get('printingtime_min'),
+                        version_data.get('gbboxwidth_x'),
+                        version_data.get('gbboxheight_y'),
+                        version_data.get('gbboxdepth_z')
                     ))
+                    cursor.execute("""
+                        INSERT INTO teg_oltp.projectversion (
+                        projectid, versionnumber, object3durl, costsnapshot_usd, 
+                        createdat, estimatedweight_g, printingtime_min, 
+                        gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, True);
+                    """, (
+                        project_id,
+                        next_version,
+                        version_data.get('object3durl'),
+                        version_data.get('costsnapshot_usd'),
+                        version_data.get('createdat'),
+                        version_data.get('estimatedweight_g'),
+                        version_data.get('printingtime_min'),
+                        version_data.get('gbboxwidth_x'),
+                        version_data.get('gbboxheight_y'),
+                        version_data.get('gbboxdepth_z')
+                    ))
+                
+                # Registro de Submallados y Materiales
 
-                    # Captura del identity
-                    generated_submesh_id = cursor.fetchone()[0]
+                # Limpieza de asignaciones de materiales
+                print("""
+                    DELETE FROM teg_oltp.materialassignment 
+                    WHERE submeshid IN (
+                        SELECT submeshid FROM teg_oltp.submesh 
+                        WHERE projectid = ? AND versionnumber = ?
+                    )
+                """, (project_id, next_version))
+                cursor.execute("""
+                    DELETE FROM teg_oltp.materialassignment 
+                    WHERE submeshid IN (
+                        SELECT submeshid FROM teg_oltp.submesh 
+                        WHERE projectid = ? AND versionnumber = ?
+                    )
+                """, (project_id, next_version))
 
-                    # 4) Registro de Asignación de Materiales a Submallados
-                    matching_assignments = [
-                        mat for mat in material_assignment_records
-                        if mat.get('submeshname') == submesh.get('submeshname') or str(mat.get('submesh_index')) == str(submesh.get('mesh_index'))
-                    ]
+                # Si se ha cargado un nuevo archivo, se trata de un nuevo proyecto
+                # o la versión anterior ya fue consolidada (no se debe editar)
+                if is_new_file or last_version_number is None:
 
-                    for assignment in matching_assignments:
+                    print("Caso if is_new_file or not is_updating_draft")
+
+                    # Limpieza de submallados del borrador actual
+                    print("""
+                        DELETE FROM teg_oltp.submesh
+                        WHERE projectid = ? AND versionnumber = ?
+                    """, (project_id, next_version))
+                    cursor.execute("""
+                        DELETE FROM teg_oltp.submesh
+                        WHERE projectid = ? AND versionnumber = ?
+                    """, (project_id, next_version))
+
+                    # Registro de submallados vinculados a la versión
+
+                    for idx, mesh in enumerate(submeshes_data):
+
+                        print("""
+                            INSERT INTO teg_oltp.submesh (
+                                projectid, versionnumber, submeshname, volume_cm3,
+                                area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            RETURNING submeshid;
+                        """, (
+                            project_id,
+                            next_version,
+                            mesh.get('submeshName'),
+                            mesh.get('volume_cm3'),
+                            mesh.get('area_cm2'),
+                            mesh.get('bboxwidth_x'),
+                            mesh.get('bboxheight_y'),
+                            mesh.get('bboxdepth_z')
+                        ))
+                        cursor.execute("""
+                            INSERT INTO teg_oltp.submesh (
+                                projectid, versionnumber, submeshname, volume_cm3,
+                                area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            RETURNING submeshid;
+                        """, (
+                            project_id,
+                            next_version,
+                            mesh.get('submeshName'),
+                            mesh.get('volume_cm3'),
+                            mesh.get('area_cm2'),
+                            mesh.get('bboxwidth_x'),
+                            mesh.get('bboxheight_y'),
+                            mesh.get('bboxdepth_z')
+                        ))
+
+                        # Captura del identity
+                        mesh['generated_id'] = cursor.fetchone()[0]
+                        print("mes['generated_id']: ", mesh['generated_id'])
+
+                    # Registro de asignaciones de materiales
+
+                    for idx, mat in enumerate (materials_data):
+                        target_submesh_id = submeshes_data[idx]['generated_id']
+                        print("""
+                            INSERT INTO teg_oltp.materialassignment (
+                            submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
+                        ) VALUES (?, ?, ?, ?, ?);
+                        """, (
+                            target_submesh_id,
+                            mat.get('materialId'),
+                            mat.get('appliedUnitPrice'),
+                            mat.get('submeshCost_usd'),
+                            mat.get('estimatedWeight_g')
+                        ))
                         cursor.execute("""
                             INSERT INTO teg_oltp.materialassignment (
-                                submeshid, materialid, appliedunitprice_usd, 
-                                submeshcost_usd, estimatedweight_g
-                            ) VALUES (?, ?, ?, ?, ?);
+                            submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
+                        ) VALUES (?, ?, ?, ?, ?);
                         """, (
-                            generated_submesh_id,
-                            assignment.get('materialId'),
-                            assignment.get('appliedUnitPrice'),
-                            assignment.get('submeshCost_usd'),
-                            assignment.get('estimatedWeight_g')
+                            target_submesh_id,
+                            mat.get('materialId'),
+                            mat.get('appliedUnitPrice'),
+                            mat.get('submeshCost_usd'),
+                            mat.get('estimatedWeight_g')
                         ))
-                
-                # Commit de la transacción
+
+                # Cambio netamente de materiales, pero con incremento de versión
+                elif not is_updating_draft:
+
+                    print("Caso elif not is_updating_draft - Incremento de versión por cambio de materiales sin nuevo archivo")
+
+                    # Limpieza de submallados del borrador actual
+                    print("""
+                            DELETE FROM teg_oltp.submesh
+                            WHERE projectid = ? AND versionnumber = ?
+                    """, (project_id, next_version))
+                    cursor.execute("""
+                            DELETE FROM teg_oltp.submesh
+                            WHERE projectid = ? AND versionnumber = ?
+                    """, (project_id, next_version))
+
+                    # Inserción de nuevas submallas
+                    # Copia de geometría de la versión interior (evitando pérdida de información por recargas de React)
+                    print("""
+                        INSERT INTO teg_oltp.submesh (
+                            projectid, versionnumber, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                        )
+                        SELECT projectid, ?, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                        FROM teg_oltp.submesh
+                        WHERE projectid = ? AND versionnumber = ?
+                        ORDER BY submeshid ASC
+                        RETURNING submeshid;
+                    """, (next_version, project_id, last_version_number))
+                    cursor.execute("""
+                        INSERT INTO teg_oltp.submesh (
+                            projectid, versionnumber, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                        )
+                        SELECT projectid, ?, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                        FROM teg_oltp.submesh
+                        WHERE projectid = ? AND versionnumber = ?
+                        ORDER BY submeshid ASC
+                        RETURNING submeshid;
+                    """, (next_version, project_id, last_version_number))
+
+                    # Asignación de materiales a esta nueva versión
+                    new_submesh_ids = cursor.fetchall()
+
+                    for idx, mat in enumerate(materials_data):
+                        if idx < len(new_submesh_ids):
+                            target_submesh_id = new_submesh_ids[idx][0]
+                            print("""
+                                INSERT INTO teg_oltp.materialassignment (
+                                    submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
+                                ) VALUES (?, ?, ?, ?, ?);
+                            """, (
+                                target_submesh_id,
+                                mat.get('materialId'),
+                                mat.get('appliedUnitPrice'),
+                                mat.get('submeshCost_usd'),
+                                mat.get('estimatedWeight_g')
+                            ))
+                            cursor.execute("""
+                                INSERT INTO teg_oltp.materialassignment (
+                                    submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
+                                ) VALUES (?, ?, ?, ?, ?);
+                            """, (
+                                target_submesh_id,
+                                mat.get('materialId'),
+                                mat.get('appliedUnitPrice'),
+                                mat.get('submeshCost_usd'),
+                                mat.get('estimatedWeight_g')
+                            ))
+
+                # Actualización de un borrador (se mantiene la versión)
+                # Cambios netamente de la asignación de materiales
+                else:
+
+                    print("Caso else")
+
+                    # Recuperación de los IDs de los submallados existentes
+                    print("""
+                        SELECT submeshid
+                        FROM teg_oltp.submesh
+                        WHERE projectid = ? AND versionnumber = ?
+                        ORDER BY submeshid ASC;
+                    """, (project_id, next_version))
+                    cursor.execute("""
+                        SELECT submeshid
+                        FROM teg_oltp.submesh
+                        WHERE projectid = ? AND versionnumber = ?
+                        ORDER BY submeshid ASC;
+                    """, (project_id, next_version))
+
+                    existing_submeshes = cursor.fetchall()
+
+                    for idx, mat in enumerate(materials_data):
+                        if idx < len(existing_submeshes):
+                            s_id = existing_submeshes[idx][0]
+                            print("""
+                                INSERT INTO teg_oltp.materialassignment (
+                                    submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
+                                ) VALUES (?, ?, ?, ?, ?);
+                            """, (
+                                s_id, 
+                                mat.get('materialId'), 
+                                mat.get('appliedUnitPrice'), 
+                                mat.get('submeshCost_usd'), 
+                                mat.get('estimatedWeight_g')
+                            ))
+                            cursor.execute("""
+                                INSERT INTO teg_oltp.materialassignment (
+                                    submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
+                                ) VALUES (?, ?, ?, ?, ?);
+                            """, (
+                                s_id, 
+                                mat.get('materialId'), 
+                                mat.get('appliedUnitPrice'), 
+                                mat.get('submeshCost_usd'), 
+                                mat.get('estimatedWeight_g')
+                            ))
+
+                #Commit de la transacción
                 conn.commit()
-                logger.info(f"[Transacción Exitosa] Proyecto {project_id} guardado. Versión asignada: {final_version_number}")
+                logger.info(f"[Transacción Exitosa] Proyecto {project_id} guardado. Versión asignada: {next_version}")
 
                 return JsonResponse({
                     'success': True,
-                    'message': f'Versión {final_version_number} guardada exitosamente.',
+                    'message': f'Versión {next_version} guardada exitosamente.',
                     'processedAsDraft': is_draft,
-                    'validatedVersionLabel': final_version_number
+                    'validatedVersionLabel': next_version
                 }, status=200)
-            
-            
+
             except Exception as tx_error:
                 # Rollback en caso de error
                 conn.rollback()
@@ -1310,6 +1544,7 @@ def save_project_version(request):
                 # Liberación de recursos del poll de PostgreSQL
                 cursor.close()
                 conn.close()
+        
         
         except json.JSONDecodeError:
             logger.error("Error al decodificar JSON en save_project_version")
@@ -1350,8 +1585,6 @@ def get_user_projects(request, user_id):
         cursor.execute(project_query, (user_id,))
         projects = cursor.fetchall()
         
-        # ... El resto de tu función queda EXACTAMENTE IGUAL a como la tienes ...
-        
         print(f"[+] Proyectos totales activos encontrados en BD para este usuario: {len(projects)}")
         
         response_data = []
@@ -1378,55 +1611,7 @@ def get_user_projects(request, user_id):
             has_published_version = any(ver[9] == '0' or ver[9] is False or ver[9] == 0 for ver in versions)
             
             if not has_published_version:
-                continue 
-            
-            # Submallados del proyecto
-            submesh_query = """
-                SELECT submeshid, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
-                FROM teg_oltp.submesh
-                WHERE projectid = ?;
-            """
-            cursor.execute(submesh_query, (p_id,))
-            submeshes = cursor.fetchall()
-            
-            # Estructuras de submallados
-            formatted_submeshes = []
-            for sub in submeshes:
-                s_id = sub[0]
-                
-                assignment_query = """
-                    SELECT MA.materialid, MA.appliedunitprice_usd, MA.submeshcost_usd, MA.estimatedweight_g,
-                           M.name, C.name
-                    FROM teg_oltp.materialassignment MA
-                    JOIN teg_oltp.material M ON MA.materialid = M.materialid
-                    JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
-                    WHERE MA.submeshid = ?;
-                """
-                cursor.execute(assignment_query, (s_id,))
-                assignments = cursor.fetchall()
-                
-                material_data = None
-                if assignments:
-                    first_assign = assignments[0]
-                    material_data = {
-                        'id': first_assign[0],
-                        'name': first_assign[4],
-                        'category': first_assign[5],
-                        'pricePerCm3': float(first_assign[1]) if first_assign[1] else 0.0
-                    }
-                
-                formatted_submeshes.append({
-                    'id': f"submesh-{s_id}",
-                    'name': sub[1],
-                    'volumeCm3': float(sub[2]) if sub[2] else 0.0,
-                    'areaCm2': float(sub[3]) if sub[3] else 0.0,
-                    'bbox_cm': {
-                        'width_cm': float(sub[4]) if sub[4] else 0.0, # bboxwidth_x
-                        'length_cm': float(sub[5]) if sub[5] else 0.0, # bboxheight_y
-                        'thickness_cm': float(sub[6]) if sub[6] else 0.0 # bboxdepth_z
-                    },
-                    'material': material_data
-                })
+                continue
             
             # Estructura de versiones del proyecto
             formatted_versions = []
@@ -1435,12 +1620,13 @@ def get_user_projects(request, user_id):
             
             for ver in versions:
                 v_url = ver[1]
-                
+                v_raw = ver[0]
+
                 try:
-                    v_num = float(ver[0])
+                    v_num = float(v_raw)
                     v_label = f"v{v_num:.1f}"
                 except (ValueError, TypeError):
-                    v_label = f"v{ver[0]}"
+                    v_label = f"v{v_raw}"
                 
                 # Guardado de los datos de la última versión válida procesada para la raíz
                 latest_object_url = v_url
@@ -1448,9 +1634,58 @@ def get_user_projects(request, user_id):
                 
                 is_draft_bool = not (ver[9] == '0' or ver[9] is False or ver[9] == 0)
                 
+
+                # Submallados de la versión del proyecto
+                submesh_query = """
+                    SELECT submeshid, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                    FROM teg_oltp.submesh
+                    WHERE projectid = ? AND versionnumber = ?;
+                """
+                cursor.execute(submesh_query, (p_id, v_num))
+                submeshes = cursor.fetchall()
+                
+                # Estructuras de submallados
+                formatted_submeshes = []
+                for sub in submeshes:
+                    s_id = sub[0]
+                    
+                    assignment_query = """
+                        SELECT MA.materialid, MA.appliedunitprice_usd, MA.submeshcost_usd, MA.estimatedweight_g,
+                            M.name, C.name
+                        FROM teg_oltp.materialassignment MA
+                        JOIN teg_oltp.material M ON MA.materialid = M.materialid
+                        JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
+                        WHERE MA.submeshid = ?;
+                    """
+                    cursor.execute(assignment_query, (s_id,))
+                    assignments = cursor.fetchone()
+                    
+                    material_data = None
+                    if assignments:
+                        material_data = {
+                            'id': assignments[0],
+                            'name': assignments[4],
+                            'category': assignments[5],
+                            'pricePerCm3': float(assignments[1]) if assignments[1] else 0.0
+                        }
+                    
+                    formatted_submeshes.append({
+                        'id': f"submesh-{s_id}",
+                        'name': sub[1],
+                        'volumeCm3': float(sub[2]) if sub[2] else 0.0,
+                        'areaCm2': float(sub[3]) if sub[3] else 0.0,
+                        'bbox_cm': {
+                            'width_cm': float(sub[4]) if sub[4] else 0.0, # bboxwidth_x
+                            'length_cm': float(sub[6]) if sub[6] else 0.0, # bboxdepth_z
+                            'thickness_cm': float(sub[5]) if sub[5] else 0.0, # bboxheight_y
+                        },
+                        'material': material_data
+                    })
+                
+                
                 formatted_versions.append({
-                    'id': f"ver-{p_id}-{ver[0]}",
-                    'label': v_label, # Ahora es un string seguro "v1.0"
+                    'id': f"ver-{p_id}-{v_raw}",
+                    'label': v_label,
                     'fileName': v_url.split('/')[-1] if v_url else 'modelo.glb',
                     'object3dUrl': v_url,
                     'for3dPrinting': is_3d_printing_bool,
