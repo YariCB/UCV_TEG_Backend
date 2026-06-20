@@ -1129,19 +1129,6 @@ def save_project_version(request):
             try:
 
                 # Registro del Proyecto
-                print("""
-                    INSERT INTO teg_oltp.project (projectid, userid, projectname, createdat, is3dprinting, isactive)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (projectid) DO UPDATE
-                    SET projectname = EXCLUDED.projectname,
-                        is3dprinting = EXCLUDED.is3dprinting      
-                """, (project_id,
-                      project_data.get('userId'),
-                      project_data.get('projectName'),
-                      project_data.get('createdAt'),
-                      project_data.get('is3Dprinting'),
-                      project_data.get('isActive', True)
-                ))
                 cursor.execute("""
                     INSERT INTO teg_oltp.project (projectid, userid, projectname, createdat, is3dprinting, isactive)
                     VALUES (?, ?, ?, ?, ?, ?)
@@ -1158,13 +1145,7 @@ def save_project_version(request):
 
 
                 # Guardado de la versión (isDraft = false)
-                print("is_draft_mode: ", is_draft_mode)
                 if not is_draft_mode:
-                    print("""
-                        UPDATE teg_oltp.projectversion
-                        SET isdraft = False
-                        WHERE projectid = ? AND isdraft = True
-                    """, (project_id,))
                     cursor.execute("""
                         UPDATE teg_oltp.projectversion
                         SET isdraft = False
@@ -1181,13 +1162,6 @@ def save_project_version(request):
                 
 
                 # Estimación de costo de versión (isDraft = True)
-
-                print("""
-                    SELECT versionnumber, isdraft
-                    FROM teg_oltp.projectversion
-                    WHERE projectid = ?
-                    ORDER BY createdat DESC LIMIT 1;
-                """, (project_id, ))
                 cursor.execute("""
                     SELECT versionnumber, isdraft
                     FROM teg_oltp.projectversion
@@ -1195,7 +1169,6 @@ def save_project_version(request):
                     ORDER BY createdat DESC LIMIT 1;
                 """, (project_id, ))
                 last_version_row = cursor.fetchone()
-                print("last_version_row: ", last_version_row)
 
                 if not last_version_row:
                     # Se trata de un proyecto nuevo, versión inicial
@@ -1223,31 +1196,11 @@ def save_project_version(request):
                         # Incremento menor: Mismo archivo 3D, cambio de materiales
                         else:
                             next_version = round(last_version_number + 0.1, 1)
-                    
-                    print("next_version: ", next_version)
                 
                 # Registro de la versión
 
                 # Si se está actualizando el borrador anterior
                 if is_updating_draft:
-                    print("""
-                        UPDATE teg_oltp.projectversion
-                        SET object3durl = ?, costsnapshot_usd = ?, createdat = ?, 
-                            estimatedweight_g = ?, printingtime_min = ?, 
-                            gbboxwidth_x = ?, gbboxheight_y = ?, gbboxdepth_z = ?
-                        WHERE projectid = ? AND versionnumber = ?;
-                    """, (
-                        version_data.get('object3durl'),
-                        version_data.get('costsnapshot_usd'),
-                        version_data.get('createdat'),
-                        version_data.get('estimatedweight_g'),
-                        version_data.get('printingtime_min'),
-                        version_data.get('gbboxwidth_x'),
-                        version_data.get('gbboxheight_y'),
-                        version_data.get('gbboxdepth_z'),
-                        project_id,
-                        next_version
-                    ))
                     cursor.execute("""
                         UPDATE teg_oltp.projectversion
                         SET object3durl = ?, costsnapshot_usd = ?, createdat = ?, 
@@ -1269,24 +1222,6 @@ def save_project_version(request):
                 
                 # Si se está agregando un nuevo borrador
                 else:
-                    print("""
-                        INSERT INTO teg_oltp.projectversion (
-                        projectid, versionnumber, object3durl, costsnapshot_usd, 
-                        createdat, estimatedweight_g, printingtime_min, 
-                        gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, True);
-                    """, (
-                        project_id,
-                        next_version,
-                        version_data.get('object3durl'),
-                        version_data.get('costsnapshot_usd'),
-                        version_data.get('createdat'),
-                        version_data.get('estimatedweight_g'),
-                        version_data.get('printingtime_min'),
-                        version_data.get('gbboxwidth_x'),
-                        version_data.get('gbboxheight_y'),
-                        version_data.get('gbboxdepth_z')
-                    ))
                     cursor.execute("""
                         INSERT INTO teg_oltp.projectversion (
                         projectid, versionnumber, object3durl, costsnapshot_usd, 
@@ -1309,13 +1244,6 @@ def save_project_version(request):
                 # Registro de Submallados y Materiales
 
                 # Limpieza de asignaciones de materiales
-                print("""
-                    DELETE FROM teg_oltp.materialassignment 
-                    WHERE submeshid IN (
-                        SELECT submeshid FROM teg_oltp.submesh 
-                        WHERE projectid = ? AND versionnumber = ?
-                    )
-                """, (project_id, next_version))
                 cursor.execute("""
                     DELETE FROM teg_oltp.materialassignment 
                     WHERE submeshid IN (
@@ -1328,13 +1256,7 @@ def save_project_version(request):
                 # o la versión anterior ya fue consolidada (no se debe editar)
                 if is_new_file or last_version_number is None:
 
-                    print("Caso if is_new_file or not is_updating_draft")
-
                     # Limpieza de submallados del borrador actual
-                    print("""
-                        DELETE FROM teg_oltp.submesh
-                        WHERE projectid = ? AND versionnumber = ?
-                    """, (project_id, next_version))
                     cursor.execute("""
                         DELETE FROM teg_oltp.submesh
                         WHERE projectid = ? AND versionnumber = ?
@@ -1344,22 +1266,6 @@ def save_project_version(request):
 
                     for idx, mesh in enumerate(submeshes_data):
 
-                        print("""
-                            INSERT INTO teg_oltp.submesh (
-                                projectid, versionnumber, submeshname, volume_cm3,
-                                area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            RETURNING submeshid;
-                        """, (
-                            project_id,
-                            next_version,
-                            mesh.get('submeshName'),
-                            mesh.get('volume_cm3'),
-                            mesh.get('area_cm2'),
-                            mesh.get('bboxwidth_x'),
-                            mesh.get('bboxheight_y'),
-                            mesh.get('bboxdepth_z')
-                        ))
                         cursor.execute("""
                             INSERT INTO teg_oltp.submesh (
                                 projectid, versionnumber, submeshname, volume_cm3,
@@ -1379,23 +1285,12 @@ def save_project_version(request):
 
                         # Captura del identity
                         mesh['generated_id'] = cursor.fetchone()[0]
-                        print("mes['generated_id']: ", mesh['generated_id'])
 
                     # Registro de asignaciones de materiales
 
                     for idx, mat in enumerate (materials_data):
                         target_submesh_id = submeshes_data[idx]['generated_id']
-                        print("""
-                            INSERT INTO teg_oltp.materialassignment (
-                            submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
-                        ) VALUES (?, ?, ?, ?, ?);
-                        """, (
-                            target_submesh_id,
-                            mat.get('materialId'),
-                            mat.get('appliedUnitPrice'),
-                            mat.get('submeshCost_usd'),
-                            mat.get('estimatedWeight_g')
-                        ))
+
                         cursor.execute("""
                             INSERT INTO teg_oltp.materialassignment (
                             submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
@@ -1411,13 +1306,7 @@ def save_project_version(request):
                 # Cambio netamente de materiales, pero con incremento de versión
                 elif not is_updating_draft:
 
-                    print("Caso elif not is_updating_draft - Incremento de versión por cambio de materiales sin nuevo archivo")
-
                     # Limpieza de submallados del borrador actual
-                    print("""
-                            DELETE FROM teg_oltp.submesh
-                            WHERE projectid = ? AND versionnumber = ?
-                    """, (project_id, next_version))
                     cursor.execute("""
                             DELETE FROM teg_oltp.submesh
                             WHERE projectid = ? AND versionnumber = ?
@@ -1425,16 +1314,7 @@ def save_project_version(request):
 
                     # Inserción de nuevas submallas
                     # Copia de geometría de la versión interior (evitando pérdida de información por recargas de React)
-                    print("""
-                        INSERT INTO teg_oltp.submesh (
-                            projectid, versionnumber, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
-                        )
-                        SELECT projectid, ?, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
-                        FROM teg_oltp.submesh
-                        WHERE projectid = ? AND versionnumber = ?
-                        ORDER BY submeshid ASC
-                        RETURNING submeshid;
-                    """, (next_version, project_id, last_version_number))
+                    # OJO: Ya se ha corregido la causa de la pérdida de información por recargas. Se puede modificar este query y hacer un insert normal
                     cursor.execute("""
                         INSERT INTO teg_oltp.submesh (
                             projectid, versionnumber, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
@@ -1452,17 +1332,7 @@ def save_project_version(request):
                     for idx, mat in enumerate(materials_data):
                         if idx < len(new_submesh_ids):
                             target_submesh_id = new_submesh_ids[idx][0]
-                            print("""
-                                INSERT INTO teg_oltp.materialassignment (
-                                    submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
-                                ) VALUES (?, ?, ?, ?, ?);
-                            """, (
-                                target_submesh_id,
-                                mat.get('materialId'),
-                                mat.get('appliedUnitPrice'),
-                                mat.get('submeshCost_usd'),
-                                mat.get('estimatedWeight_g')
-                            ))
+
                             cursor.execute("""
                                 INSERT INTO teg_oltp.materialassignment (
                                     submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
@@ -1479,15 +1349,7 @@ def save_project_version(request):
                 # Cambios netamente de la asignación de materiales
                 else:
 
-                    print("Caso else")
-
                     # Recuperación de los IDs de los submallados existentes
-                    print("""
-                        SELECT submeshid
-                        FROM teg_oltp.submesh
-                        WHERE projectid = ? AND versionnumber = ?
-                        ORDER BY submeshid ASC;
-                    """, (project_id, next_version))
                     cursor.execute("""
                         SELECT submeshid
                         FROM teg_oltp.submesh
@@ -1500,17 +1362,6 @@ def save_project_version(request):
                     for idx, mat in enumerate(materials_data):
                         if idx < len(existing_submeshes):
                             s_id = existing_submeshes[idx][0]
-                            print("""
-                                INSERT INTO teg_oltp.materialassignment (
-                                    submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
-                                ) VALUES (?, ?, ?, ?, ?);
-                            """, (
-                                s_id, 
-                                mat.get('materialId'), 
-                                mat.get('appliedUnitPrice'), 
-                                mat.get('submeshCost_usd'), 
-                                mat.get('estimatedWeight_g')
-                            ))
                             cursor.execute("""
                                 INSERT INTO teg_oltp.materialassignment (
                                     submeshid, materialid, appliedunitprice_usd, submeshcost_usd, estimatedweight_g
