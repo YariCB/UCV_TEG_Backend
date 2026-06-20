@@ -934,13 +934,15 @@ def evaluate_3d_model(request):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     safe_user_id = _sanitize_path_segment(user_id, 'unknown')
     safe_project_id = _sanitize_path_segment(project_id, 'project')
-    safe_version = _sanitize_path_segment(version_label or 'v1.0', 'v1.0')
+    # safe_version = _sanitize_path_segment(version_label or 'v1.0', 'v1.0')
+    original_filename = os.path.splitext(uploaded_file.name)[0]
+    safe_original_name = _SAFE_SEGMENT_RE.sub('_', original_filename)
     relative_folder = os.path.join('users', f'user_{safe_user_id}', 'projects', safe_project_id)
     full_folder = os.path.join(settings.MEDIA_ROOT, relative_folder)
     os.makedirs(full_folder, exist_ok=True)
 
     # Formato de nombre: date_userid_projectid_version.ext
-    safe_filename = f"{timestamp}_{safe_user_id}_{safe_project_id}_{safe_version}{original_ext}"
+    safe_filename = f"{timestamp}_{safe_user_id}_{safe_project_id}_{safe_original_name}{original_ext}"
     fs = FileSystemStorage(location=full_folder)
     saved_filename = fs.save(safe_filename, uploaded_file)
     input_path = os.path.join(full_folder, saved_filename)

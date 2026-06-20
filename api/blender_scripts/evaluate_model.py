@@ -228,7 +228,18 @@ def analyze_model_submeshes(filename=""):
             return value * 0.1
         return value * scene_scale * 100.0
 
+    base_source_name = os.path.splitext(filename)[0] if filename else "mesh"
+    
     for idx, obj in enumerate(mesh_objects):
+
+        # Renombrado de submallados (si no poseen nombre)
+        obj_name = obj.name
+        is_generic = not obj_name or obj_name.lower().startswith(('object', 'mesh', 'cube', 'stl', 'untitled'))
+        is_filename = (obj_name == base_source_name or obj_name == filename)
+        
+        if is_generic or is_filename:
+            obj.name = f"{base_source_name}_{idx}"
+
         obj_eval = obj.evaluated_get(depsgraph)
         mesh_eval = obj_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
         dim_x, dim_y, dim_z = get_mesh_local_dimensions(mesh_eval)
