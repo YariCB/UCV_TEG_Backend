@@ -1650,11 +1650,13 @@ def get_user_projects(request, user_id):
                     s_id = sub[0]
                     
                     assignment_query = """
-                        SELECT MA.materialid, MA.appliedunitprice_usd, MA.submeshcost_usd, MA.estimatedweight_g,
-                            M.name, C.name
+                        SELECT MA.materialid, MA.appliedunitprice_usd, MA.submeshcost_usd,
+                            MA.estimatedweight_g, M.name, C.name, D.calculationmethod
                         FROM teg_oltp.materialassignment MA
                         JOIN teg_oltp.material M ON MA.materialid = M.materialid
                         JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
+						JOIN teg_oltp.units U ON M.unitid = U.unitid
+						JOIN teg_oltp.dimension D ON U.dimensionid = D.dimensionid
                         WHERE MA.submeshid = ?;
                     """
                     cursor.execute(assignment_query, (s_id,))
@@ -1666,7 +1668,8 @@ def get_user_projects(request, user_id):
                             'id': assignments[0],
                             'name': assignments[4],
                             'category': assignments[5],
-                            'pricePerCm3': float(assignments[1]) if assignments[1] else 0.0
+                            'pricePerCm3': float(assignments[1]) if assignments[1] else 0.0,
+                            'calculationMethod': assignments[6]
                         }
                     
                     formatted_submeshes.append({
@@ -1678,6 +1681,11 @@ def get_user_projects(request, user_id):
                             'width_cm': float(sub[4]) if sub[4] else 0.0, # bboxwidth_x
                             'length_cm': float(sub[6]) if sub[6] else 0.0, # bboxdepth_z
                             'thickness_cm': float(sub[5]) if sub[5] else 0.0, # bboxheight_y
+                        },
+                        'bboxRawCm': {
+                            'x': float(sub[4]) if sub[4] else 0.0,
+                            'y': float(sub[5]) if sub[5] else 0.0,
+                            'z': float(sub[6]) if sub[6] else 0.0,
                         },
                         'material': material_data
                     })
@@ -1691,6 +1699,12 @@ def get_user_projects(request, user_id):
                     'for3dPrinting': is_3d_printing_bool,
                     'isDraft': is_draft_bool,
                     'costSnapshot': float(ver[2]) if ver[2] else 0.0,
+                    'estimatedWeightG': float(ver[4]) if ver[4] else 0.0,
+                    'filamentGrams': float(ver[4]) if ver[4] else 0.0,
+                    'printingTimeMin': float(ver[5]) if ver[5] else 0.0,
+                    'gbboxwidth_x': float(ver[6]) if ver[6] else 0.0,
+                    'gbboxheight_y': float(ver[7]) if ver[7] else 0.0,
+                    'gbboxdepth_z': float(ver[8]) if ver[8] else 0.0,
                     'submeshes': formatted_submeshes
                 })
             
