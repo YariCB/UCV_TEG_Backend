@@ -1600,7 +1600,7 @@ def get_user_projects_count(request, user_id):
         cursor = conn.cursor()
         
         count_query = """
-            SELECT COUNT(P.projectid) 
+            SELECT COUNT(DISTINCT P.projectid) 
             FROM teg_oltp.project P
             JOIN teg_oltp.projectversion PV ON P.projectid = PV.projectid
             WHERE userid = ? AND isactive = true AND isDraft = false;
