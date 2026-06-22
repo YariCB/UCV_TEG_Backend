@@ -21,7 +21,10 @@ from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
 # Importaciones de ETLs
-from core.ETL.orchestador import (sync_user_to_olap, sync_material_to_olap)
+from core.ETL.orchestador import (
+    sync_user_to_olap, sync_material_to_olap,
+    sync_submeshes_to_olap, deactivate_project_in_olap
+)
 
 
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
@@ -1165,9 +1168,24 @@ def save_project_version(request):
                       project_data.get('isActive', True)
                 ))
 
+                # Obtención de la última versión registrada para el proyecto
+                cursor.execute("""
+                    SELECT versionnumber, isdraft
+                    FROM teg_oltp.projectversion
+                    WHERE projectid = ?
+                    ORDER BY createdat DESC LIMIT 1;
+                """, (project_id, ))
+                last_version_row = cursor.fetchone()
+
 
                 # Guardado de la versión (isDraft = false)
+
                 if not is_draft_mode:
+                    
+                    # Identificación de versión a consolidar
+                    version_number = last_version_row[0]
+                    print(f"Consolidando versión final: {version_number} para proyecto {project_id}")
+                    
                     cursor.execute("""
                         UPDATE teg_oltp.projectversion
                         SET isdraft = False
@@ -1175,6 +1193,10 @@ def save_project_version(request):
                     """, (project_id,))
 
                     conn.commit()
+
+                    # Ejecución del ETL para sincronización de submallados por versiones en OLAP
+                    print(f"Ejecutando ETL de sincronización de submallados para proyecto {project_id} y versión {version_number}")
+                    sync_submeshes_to_olap(project_id, version_number)
 
                     return JsonResponse({
                         'success': True,
@@ -1184,13 +1206,6 @@ def save_project_version(request):
                 
 
                 # Estimación de costo de versión (isDraft = True)
-                cursor.execute("""
-                    SELECT versionnumber, isdraft
-                    FROM teg_oltp.projectversion
-                    WHERE projectid = ?
-                    ORDER BY createdat DESC LIMIT 1;
-                """, (project_id, ))
-                last_version_row = cursor.fetchone()
 
                 if not last_version_row:
                     # Se trata de un proyecto nuevo, versión inicial
@@ -1399,6 +1414,10 @@ def save_project_version(request):
                 #Commit de la transacción
                 conn.commit()
                 logger.info(f"[Transacción Exitosa] Proyecto {project_id} guardado. Versión asignada: {next_version}")
+
+                # Ejecución de ETL de submallados por versión de proyecto para inserción/actualización en OLAP
+                print("[ETL] Iniciando sincronización de submallados a OLAP...")
+                sync_submeshes_to_olap(project_id, next_version)
 
                 return JsonResponse({
                     'success': True,
@@ -1666,6 +1685,9 @@ def deactivate_project(request, project_id):
             return JsonResponse({'error': 'El proyecto no fue encontrado'}, status=404)
         
         conn.commit()
+
+        # Ejecución de ETL de submallados por versión de proyecto para actualización en OLAP
+        deactivate_project_in_olap(project_id)
             
         logger.info(f"[Proyecto Desactivado] ID: {project_id} marcado como inactivo.")
         return JsonResponse({'success': True, 'message': 'Proyecto eliminado exitosamente.'}, status=200)
