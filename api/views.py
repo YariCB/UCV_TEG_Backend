@@ -20,6 +20,10 @@ from django.conf import settings
 from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
+# Importaciones de ETLs
+from core.ETL.orchestador import sync_user_to_olap
+
+
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
 MAX_SUBMESHES = 10
 
@@ -59,9 +63,14 @@ def register_user(request):
             query = """
                 INSERT INTO teg_oltp.users (FirstName, LastName, Email, Password, RegistrationDate, isActive)
                 VALUES (?, ?, ?, ?, ?, ?)
+                RETURNING UserID
             """
             cursor.execute(query, (first_name, last_name, email, hashed_password, registration_date, is_active))
+            new_user_id = cursor.fetchone()[0]
             conn.commit()
+
+            # Ejecución de ETL para inserción de nuevo usuario en OLAP
+            sync_user_to_olap(new_user_id)
 
             try:
                 subject, text_body, html_body = build_welcome_email(
@@ -286,6 +295,8 @@ def get_user_profile(request):
             if 'conn' in locals():
                 conn.close()
 
+
+# Actualización de perfil de usuario
 @csrf_exempt
 def update_user_profile(request):
     if request.method == 'POST':
@@ -341,6 +352,9 @@ def update_user_profile(request):
                     (first_name, last_name, email, user_id)
                 )
             conn.commit()
+
+            # Ejecución de ETL para actualización de usuario en OLAP
+            sync_user_to_olap(user_id)
 
             return JsonResponse({
                 'message': 'Perfil actualizado con éxito',
