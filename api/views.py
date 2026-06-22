@@ -21,7 +21,7 @@ from .emails import build_welcome_email, build_reset_email
 logger = logging.getLogger(__name__)
 
 # Importaciones de ETLs
-from core.ETL.orchestador import sync_user_to_olap
+from core.ETL.orchestador import (sync_user_to_olap, sync_material_to_olap)
 
 
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
@@ -527,6 +527,9 @@ def create_material(request):
         material_id = row[0] if row else None
         conn.commit()
 
+        # Ejecución de ETL para inserción de nuevo material en OLAP
+        sync_material_to_olap(material_id)
+
         return JsonResponse({'message': 'Material creado con éxito', 'materialId': material_id}, status=201)
 
     except json.JSONDecodeError:
@@ -641,6 +644,9 @@ def update_material(request, material_id):
             )
         )
         conn.commit()
+
+        # Ejecución de ETL para actualización de material en OLAP
+        sync_material_to_olap(material_id)
 
         if cursor.rowcount == 0:
             return JsonResponse({'error': 'Material no encontrado'}, status=404)
