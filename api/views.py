@@ -28,7 +28,7 @@ from core.ETL.orchestador import (
 
 
 ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
-MAX_SUBMESHES = 10
+MAX_SUBMESHES = 15
 
 DEFAULT_PRUSA_CONFIG = Path(__file__).resolve().parent / 'prusa_defaults.ini'
 
