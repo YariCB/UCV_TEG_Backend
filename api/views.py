@@ -698,7 +698,9 @@ def get_user_materials(request, user_id):
                     U.dimensionid,
                     D.name AS DimensionName,
                     D.calculationmethod,
-                    U.conversionfactor
+                    U.conversionfactor,
+                    U_dens.abbreviation AS DensityAbb,
+					U_gros.abbreviation AS ThicknessAbbr
             FROM teg_oltp.material M
             JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
             JOIN teg_oltp.units U ON M.unitid = U.unitid
@@ -732,7 +734,9 @@ def get_user_materials(request, user_id):
                 'dimensionId': row[19],
                 'dimensionName': row[20],
                 'calculationMethod': row[21],
-                'conversionFactor': row[22]
+                'conversionFactor': row[22],
+                'densityUnitAbbreviation': row[23],
+                'thicknessUnitAbbreviation': row[24]
             } 
             for row in cursor.fetchall()
         ]
