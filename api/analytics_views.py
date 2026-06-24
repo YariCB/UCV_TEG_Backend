@@ -43,7 +43,7 @@ def get_metabase_embed_url(request):
         print("Token generado:", token)
 
         # Construye la URL segura de incrustación añadiendo parámetros visuales mediante hash URL
-        embed_url = f"{METABASE_SITE_URL}/embed/dashboard/{token}#bordered=false&titled=false&theme={theme}"
+        embed_url = f"{METABASE_SITE_URL}/embed/dashboard/{token}#bordered=false&titled=false&background=false"
         print("URL de incrustación generada:", embed_url)
 
         return JsonResponse({'dashboardUrl': embed_url}, status=200)
