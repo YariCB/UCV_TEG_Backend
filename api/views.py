@@ -1468,11 +1468,21 @@ def get_user_projects(request, user_id):
             limit_clause = f" LIMIT {int(limit_param)}"
 
         project_query = f"""
-            SELECT DISTINCT P.projectid, P.userid, P.projectname, P.createdat, P.is3dprinting, P.isactive
+            SELECT DISTINCT ON (P.projectid) 
+                P.projectid, 
+                P.userid, 
+                P.projectname, 
+                P.createdat, 
+                P.is3dprinting, 
+                P.isactive, 
+                PV.createdat AS version_createdat
             FROM teg_oltp.project P
             JOIN teg_oltp.projectversion PV ON P.projectid = PV.projectid
-            WHERE P.userid = ? AND P.isactive = true AND PV.isdraft = false
-            ORDER BY P.createdat DESC{limit_clause};
+            WHERE P.userid = ?
+            AND P.isactive = true 
+            AND PV.isdraft = false
+            ORDER BY P.projectid, PV.createdat DESC
+            {limit_clause};
         """
         cursor.execute(project_query, (user_id,))
         projects = cursor.fetchall()
@@ -1586,6 +1596,7 @@ def get_user_projects(request, user_id):
                 formatted_versions.append({
                     'id': f"ver-{p_id}-{v_raw}",
                     'label': v_label,
+                    'versionNumber': float(v_num) if 'v_num' in locals() else float(v_raw),
                     'fileName': v_url.split('/')[-1] if v_url else 'modelo.glb',
                     'object3dUrl': v_url,
                     'for3dPrinting': is_3d_printing_bool,

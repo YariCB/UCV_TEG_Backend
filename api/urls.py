@@ -20,6 +20,7 @@ from .views import(
     get_user_projects_count,
     deactivate_project
 )
+from .analytics_views import get_metabase_embed_url
 
 urlpatterns = [
     # Auth
@@ -48,4 +49,7 @@ urlpatterns = [
     path('projects/user/<int:user_id>/', get_user_projects, name='get_user_projects'),
     path('projects/user/<int:user_id>/count/', get_user_projects_count, name='get_user_projects_count'),
     path('projects/deactivate/<str:project_id>/', deactivate_project, name='deactivate_project'),
+
+    # Analytics
+    path('analytics/metabase-url/', get_metabase_embed_url, name='get_metabase_embed_url'),
 ]
