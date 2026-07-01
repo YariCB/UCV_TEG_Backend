@@ -100,6 +100,8 @@ def apply_gltf_export_options(props, kwargs):
         kwargs['export_normals'] = True
     if 'export_tangents' in props:
         kwargs['export_tangents'] = True
+    if 'export_extras' in props:
+        kwargs['export_extras'] = True
     return kwargs
 
 
@@ -231,6 +233,7 @@ def analyze_model_submeshes(filename=""):
     base_source_name = os.path.splitext(filename)[0] if filename else "mesh"
     
     for idx, obj in enumerate(mesh_objects):
+        stable_id = f"submesh-{idx + 1}"
 
         # Renombrado de submallados (si no poseen nombre)
         obj_name = obj.name
@@ -239,6 +242,10 @@ def analyze_model_submeshes(filename=""):
         
         if is_generic or is_filename:
             obj.name = f"{base_source_name}_{idx}"
+
+        obj['submesh_id'] = stable_id
+        obj['submesh_index'] = idx + 1
+        obj['submesh_name'] = obj.name
 
         obj_eval = obj.evaluated_get(depsgraph)
         mesh_eval = obj_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
@@ -303,9 +310,12 @@ def analyze_model_submeshes(filename=""):
         }
         
         submeshes_info.append({
-            'id': f"submesh-{idx + 1}",
+            'id': stable_id,
             'index': idx + 1,
             'name': obj.name,
+            'submesh_id': stable_id,
+            'submesh_index': idx + 1,
+            'submesh_name': obj.name,
             'bbox_cm': bbox_cm,
             'bbox_cm_raw': bbox_cm_raw,
             'volume_cm3': round(volume_cm3, 2),

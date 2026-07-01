@@ -1066,12 +1066,22 @@ def evaluate_3d_model(request):
     original_base_name = os.path.splitext(uploaded_file.name)[0]
     temp_base_name = os.path.splitext(saved_filename)[0]
     for submesh in submeshes_detail:
-        current_name = submesh.get('submeshname', '')
+        current_name = submesh.get('name') or submesh.get('submeshname', '')
         # Si el submallado contiene el prefijo temporal de Docker, se restaura al original
         if temp_base_name in current_name:
-            submesh['submeshname'] = current_name.replace(temp_base_name, original_base_name)
+            current_name = current_name.replace(temp_base_name, original_base_name)
         elif current_name == temp_base_name or not current_name:
-            submesh['submeshname'] = original_base_name
+            current_name = original_base_name
+
+        submesh['name'] = current_name
+        submesh['submeshname'] = current_name
+
+        if not submesh.get('id') and submesh.get('index'):
+            submesh['id'] = f"submesh-{submesh['index']}"
+        if not submesh.get('index') and isinstance(submesh.get('id'), str):
+            match = re.search(r'(\d+)$', submesh['id'])
+            if match:
+                submesh['index'] = int(match.group(1))
 
     response = {
         'allowed': allowed,
