@@ -17,6 +17,17 @@ def write_report(path, payload):
         json.dump(payload, report_file)
 
 
+def emit_progress(percent, stage, message, **extra):
+    payload = {
+        'percent': percent,
+        'stage': stage,
+        'message': message,
+    }
+    if extra:
+        payload.update(extra)
+    print(f"__EVAL_PROGRESS__ {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
+
 # Habilitación de addons necesarios para importación/exportación de formatos
 # 3D en Blender, con manejo de versiones y compatibilidad
 def enable_addon(module_name):
@@ -505,9 +516,12 @@ def auto_slice_objects_for_printing(max_size_cm=22.0, needs_millimeters_fix=Fals
 
 def main(args):
     input_ext = os.path.splitext(args.input)[1].lower()
+    emit_progress(5, 'import', 'Preparando importación del modelo 3D.')
     import_model(args.input)
+    emit_progress(20, 'analyze', 'Modelo importado. Analizando submallados y geometría.')
     submeshes_detail, needs_millimeters_fix = analyze_model_submeshes(args.filename or args.input)
     submesh_count = len(submeshes_detail)
+    emit_progress(45, 'analyze', f'Submallados detectados: {submesh_count}.')
 
     exported = False
     output_path = None
@@ -516,9 +530,11 @@ def main(args):
 
     # Verificación de cumplimiento del límite de submallados
     if args.max_submeshes <= 0 or submesh_count <= args.max_submeshes:
+        emit_progress(60, 'export_glb', 'Exportando vista web en GLB.')
         # Exportación a GLB para visualización web
         output_path, export_format = export_glb(args.output)
         exported = True
+        emit_progress(75, 'export_glb', 'Exportación GLB completada.')
         if args.for_3d_printing:
             export_scale = 1.0 if needs_millimeters_fix else 1000.0
             base_output_path = os.path.splitext(args.output)[0]
@@ -527,6 +543,7 @@ def main(args):
                 stl_output_path = os.path.abspath(stl_output_path)
 
                 # Verificación de dimensiones y necesidad de segmentación de pieza
+                emit_progress(82, 'slice', 'Preparando el STL para estimación de impresión 3D.')
                 sys.stdout.write("[Blender] Ejecución de análisis de dimensiones para segmentación automática (Límite: 22x22 cm)... \n")
                 print("[Blender] Ejecución de análisis de dimensiones para segmentación automática (Límite: 22x22 cm)... \n", flush=True)
                 auto_slice_objects_for_printing(max_size_cm=22.0, needs_millimeters_fix=needs_millimeters_fix)
@@ -535,6 +552,7 @@ def main(args):
                 export_stl(stl_output_path, scale=export_scale)
                 sys.stdout.write(f"[Blender] Gemelo STL generado con éxito en: {stl_output_path}\n")
                 print(f"[Blender] Gemelo STL generado con éxito en: {stl_output_path}\n", flush=True)
+                emit_progress(92, 'slice', 'STL generado y validado para laminación.')
 
                 # Actualización de datos para reporte final JSON
                 submeshes_detail, needs_millimeters_fix = analyze_model_submeshes(args.filename or args.input)
@@ -547,6 +565,7 @@ def main(args):
 
 
     # Datos de bounding box global enlazados al espacio métrico local
+    emit_progress(96, 'report', 'Consolidando métricas finales.')
     
     global_corners = []
     for obj in bpy.context.scene.objects:
@@ -588,6 +607,7 @@ def main(args):
         'needs_millimeters_fix': needs_millimeters_fix,
         'stl_scale': 1.0 if needs_millimeters_fix else 1000.0,
     })
+    emit_progress(100, 'done', 'Procesamiento completado correctamente.', submeshCount=submesh_count)
 
 
 if __name__ == '__main__':

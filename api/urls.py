@@ -18,7 +18,8 @@ from .views import(
     save_project_version,
     get_user_projects,
     get_user_projects_count,
-    deactivate_project
+    deactivate_project,
+    evaluate_3d_model_status
 )
 from .analytics_views import get_metabase_embed_url
 
@@ -43,6 +44,7 @@ urlpatterns = [
 
     # Model processing
     path('models/evaluate/', evaluate_3d_model, name='evaluate_3d_model'),
+    path('models/evaluate/status/<str:job_id>/', evaluate_3d_model_status, name='evaluate_3d_model_status'),
 
     # Projects & Versions
     path('projects/save-version/', save_project_version, name='save_project_version'),

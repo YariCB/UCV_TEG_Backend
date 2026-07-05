@@ -7,6 +7,8 @@ import string
 import shutil
 import subprocess
 import re
+import threading
+import uuid
 from pathlib import Path
 from datetime import datetime
 from django.http import JsonResponse
@@ -31,8 +33,274 @@ ALLOWED_MODEL_EXTENSIONS = {'.blend', '.obj', '.glb', '.stl'}
 MAX_SUBMESHES = 15
 
 DEFAULT_PRUSA_CONFIG = Path(__file__).resolve().parent / 'prusa_defaults.ini'
+MODEL_EVALUATION_JOBS_DIR = Path(settings.MEDIA_ROOT) / 'model_evaluation_jobs'
+MODEL_EVALUATION_PROGRESS_PREFIX = '__EVAL_PROGRESS__ '
 
 _SAFE_SEGMENT_RE = re.compile(r'[^a-zA-Z0-9_-]')
+
+
+def _now_iso():
+    return datetime.now().isoformat(timespec='seconds')
+
+
+def _job_status_path(job_id):
+    return MODEL_EVALUATION_JOBS_DIR / job_id / 'status.json'
+
+
+def _job_log_path(job_id):
+    return MODEL_EVALUATION_JOBS_DIR / job_id / 'stdout.log'
+
+
+def _read_json_file(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file_handle:
+            return json.load(file_handle)
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError:
+        return None
+
+
+def _write_json_file(file_path, payload):
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = file_path.with_suffix(f'{file_path.suffix}.tmp')
+    with open(temp_path, 'w', encoding='utf-8') as file_handle:
+        json.dump(payload, file_handle, ensure_ascii=False)
+    os.replace(temp_path, file_path)
+
+
+def _update_job_status(job_id, **updates):
+    status_path = _job_status_path(job_id)
+    current = _read_json_file(status_path) or {'jobId': job_id}
+    current.update(updates)
+    current['jobId'] = job_id
+    current['updatedAt'] = _now_iso()
+    _write_json_file(status_path, current)
+    return current
+
+
+def _parse_progress_marker(line):
+    if not line.startswith(MODEL_EVALUATION_PROGRESS_PREFIX):
+        return None
+
+    raw_payload = line[len(MODEL_EVALUATION_PROGRESS_PREFIX):].strip()
+    if not raw_payload:
+        return None
+
+    try:
+        return json.loads(raw_payload)
+    except json.JSONDecodeError:
+        return None
+
+
+def _emit_job_log(job_id, text):
+    log_path = _job_log_path(job_id)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, 'a', encoding='utf-8') as log_file:
+        log_file.write(f'{text}\n')
+
+
+def _build_model_evaluation_response(
+    report,
+    uploaded_file_name,
+    saved_filename,
+    output_path,
+    relative_folder,
+    input_path,
+    for_3d_printing,
+    original_ext,
+):
+    if report.get('error'):
+        raise RuntimeError(report['error'])
+
+    submesh_count = int(report.get('submesh_count', 0))
+    submeshes_detail = report.get('submeshes', [])
+    allowed = submesh_count <= MAX_SUBMESHES
+
+    original_base_name = os.path.splitext(uploaded_file_name)[0]
+    temp_base_name = os.path.splitext(saved_filename)[0]
+    for submesh in submeshes_detail:
+        current_name = submesh.get('name') or submesh.get('submeshname', '')
+        if temp_base_name in current_name:
+            current_name = current_name.replace(temp_base_name, original_base_name)
+        elif current_name == temp_base_name or not current_name:
+            current_name = original_base_name
+
+        submesh['name'] = current_name
+        submesh['submeshname'] = current_name
+
+        if not submesh.get('id') and submesh.get('index'):
+            submesh['id'] = f"submesh-{submesh['index']}"
+        if not submesh.get('index') and isinstance(submesh.get('id'), str):
+            match = re.search(r'(\d+)$', submesh['id'])
+            if match:
+                submesh['index'] = int(match.group(1))
+
+    response = {
+        'allowed': allowed,
+        'submeshCount': submesh_count,
+        'submeshes': submeshes_detail,
+        'originalName': uploaded_file_name,
+        'gbbox': report.get('global_bbox', {'x': 0, 'y': 0, 'z': 0}),
+    }
+
+    report_output_path = report.get('output_path') or output_path
+    if allowed and report.get('exported') and report_output_path and os.path.exists(report_output_path):
+        exported_filename = os.path.basename(report_output_path)
+        gltf_url = f"{settings.MEDIA_URL}{relative_folder}/{exported_filename}".replace('\\', '/')
+        response.update({
+            'gltfUrl': gltf_url,
+            'gltfFileName': exported_filename,
+        })
+        stl_path = report.get('stl_output_path')
+        if (not stl_path or not os.path.exists(stl_path)) and original_ext == '.stl' and os.path.exists(input_path):
+            stl_path = input_path
+        if for_3d_printing and stl_path and os.path.exists(stl_path):
+            scale_factor = 1.0
+            slicing_results = _slice_with_prusa(stl_path, scale_factor)
+            if slicing_results.get('success'):
+                response.update({
+                    'printingTimeMin': slicing_results['printingTimeMin'],
+                    'filamentGrams': slicing_results['filamentGrams'],
+                    'filamentVolumeCm3': slicing_results['filamentVolumeCm3'],
+                })
+            else:
+                error_detail = slicing_results.get('error')
+                logger.error("Error en PrusaSlicer CLI: %s", error_detail)
+                response['slicingError'] = error_detail or 'No se pudo estimar el costo de impresión 3D.'
+                response['printingTimeMin'] = 'Desconocido'
+                response['filamentGrams'] = 0
+                response['filamentVolumeCm3'] = 0
+
+    elif not allowed:
+        response['message'] = (
+            'El modelo supera el límite de submallados. '
+            'Por favor, ingrese un modelo con menos submallados.'
+        )
+    else:
+        response['message'] = 'No se pudo exportar el modelo a GLB.'
+
+    return response
+
+
+def _run_model_evaluation_job(job_id, job_context):
+    status_path = _job_status_path(job_id)
+    log_prefix = f"[ModelJob:{job_id}]"
+
+    def set_status(**updates):
+        return _update_job_status(job_id, **updates)
+
+    try:
+        set_status(
+            status='running',
+            stage='initializing',
+            progress=5,
+            message='Iniciando evaluación del modelo en segundo plano.',
+        )
+
+        command = job_context['command']
+        report_path = job_context['report_path']
+        uploaded_file_name = job_context['uploaded_file_name']
+        saved_filename = job_context['saved_filename']
+        output_path = job_context['output_path']
+        relative_folder = job_context['relative_folder']
+        input_path = job_context['input_path']
+        for_3d_printing = job_context['for_3d_printing']
+        original_ext = job_context['original_ext']
+
+        set_status(progress=10, stage='launching_blender', message='Lanzando Blender y analizando geometría.')
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        collected_output = []
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.rstrip('\n')
+            if line:
+                collected_output.append(line)
+                _emit_job_log(job_id, line)
+
+            progress_data = _parse_progress_marker(line.strip()) if line else None
+            if progress_data:
+                updates = {
+                    'status': 'running',
+                    'stage': progress_data.get('stage', 'processing'),
+                    'progress': int(progress_data.get('percent', 0)),
+                    'message': progress_data.get('message', 'Procesando modelo 3D.'),
+                }
+                if 'submeshCount' in progress_data:
+                    updates['submeshCount'] = progress_data.get('submeshCount')
+                set_status(**updates)
+
+        return_code = process.wait()
+        if return_code != 0:
+            raise RuntimeError(
+                'No se pudo procesar el modelo 3D. '
+                f'Detalle: {" | ".join(collected_output[-10:])}'
+            )
+
+        if not os.path.exists(report_path):
+            raise RuntimeError('No se generó el reporte de evaluación')
+
+        with open(report_path, 'r', encoding='utf-8') as report_file:
+            report = json.load(report_file)
+
+        response = _build_model_evaluation_response(
+            report=report,
+            uploaded_file_name=uploaded_file_name,
+            saved_filename=saved_filename,
+            output_path=output_path,
+            relative_folder=relative_folder,
+            input_path=input_path,
+            for_3d_printing=for_3d_printing,
+            original_ext=original_ext,
+        )
+
+        set_status(
+            status='completed',
+            stage='done',
+            progress=100,
+            message='El backend terminó de procesar el modelo.',
+            result=response,
+        )
+        _emit_job_log(job_id, f"{log_prefix} completed")
+
+    except Exception as exc:
+        logger.exception('%s Falló la evaluación en segundo plano', log_prefix)
+        set_status(
+            status='failed',
+            stage='failed',
+            progress=100,
+            message='La evaluación del modelo falló.',
+            error=str(exc),
+        )
+
+
+def _start_model_evaluation_job(job_context):
+    job_id = uuid.uuid4().hex
+    job_dir = MODEL_EVALUATION_JOBS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _update_job_status(
+        job_id,
+        status='queued',
+        stage='queued',
+        progress=0,
+        message='Archivo recibido. Esperando procesamiento.',
+        createdAt=_now_iso(),
+        result=None,
+        error=None,
+    )
+
+    worker = threading.Thread(target=_run_model_evaluation_job, args=(job_id, job_context), daemon=True)
+    worker.start()
+    return job_id
 
 
 # --- AUTH ---
@@ -1021,115 +1289,46 @@ def evaluate_3d_model(request):
         command.append('--for-3d-printing')
 
     try:
-        # Ejecución del análisis geométrico
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return JsonResponse({'error': 'Tiempo de espera agotado durante el procesamiento'}, status=504)
-
-    # Verificación de resultados y manejo de errores
-
-    if result.returncode != 0:
-        logger.error('Blender fallo: %s', result.stderr or result.stdout)
-        return JsonResponse({'error': 'No se pudo procesar el modelo 3D'}, status=500)
-
-    if not os.path.exists(report_path):
-        return JsonResponse({'error': 'No se generó el reporte de evaluación'}, status=500)
-
-    # Carga y conversión del reporte devuelto por Blender
-    try:
-        with open(report_path, 'r', encoding='utf-8') as report_file:
-            report = json.load(report_file)
-    except json.JSONDecodeError:
-        return JsonResponse({'error': 'Reporte de evaluación inválido'}, status=500)
-
-    # Control de excepciones atrapadas e identificadas por el script de Blender
-    if report.get('error'):
-        logger.error('Error en reporte Blender: %s', report.get('error'))
-        if report.get('traceback'):
-            logger.error('Traceback Blender: %s', report.get('traceback'))
-        return JsonResponse({'error': report['error']}, status=422)
-
-    # Evaluación de submallados permitidos
-
-    submesh_count = int(report.get('submesh_count', 0))
-    submeshes_detail = report.get('submeshes', [])
-    allowed = submesh_count <= MAX_SUBMESHES
-
-    # Mantenimiento del nombre original de los submallados
-
-    original_base_name = os.path.splitext(uploaded_file.name)[0]
-    temp_base_name = os.path.splitext(saved_filename)[0]
-    for submesh in submeshes_detail:
-        current_name = submesh.get('name') or submesh.get('submeshname', '')
-        # Si el submallado contiene el prefijo temporal de Docker, se restaura al original
-        if temp_base_name in current_name:
-            current_name = current_name.replace(temp_base_name, original_base_name)
-        elif current_name == temp_base_name or not current_name:
-            current_name = original_base_name
-
-        submesh['name'] = current_name
-        submesh['submeshname'] = current_name
-
-        if not submesh.get('id') and submesh.get('index'):
-            submesh['id'] = f"submesh-{submesh['index']}"
-        if not submesh.get('index') and isinstance(submesh.get('id'), str):
-            match = re.search(r'(\d+)$', submesh['id'])
-            if match:
-                submesh['index'] = int(match.group(1))
-
-    response = {
-        'allowed': allowed,
-        'submeshCount': submesh_count,
-        'submeshes': submeshes_detail,
-        'originalName': uploaded_file.name,
-        'gbbox': report.get('global_bbox', {'x': 0, 'y': 0, 'z': 0}),
-    }
-
-    # Despacho de URLs estáticas públicas para renderizado con Three.js
-    report_output_path = report.get('output_path') or output_path
-    if allowed and report.get('exported') and report_output_path and os.path.exists(report_output_path):
-        exported_filename = os.path.basename(report_output_path)
-        gltf_url = f"{settings.MEDIA_URL}{relative_folder}/{exported_filename}".replace('\\', '/')
-        response.update({
-            'gltfUrl': gltf_url,
-            'gltfFileName': exported_filename,
+        job_id = _start_model_evaluation_job({
+            'command': command,
+            'report_path': report_path,
+            'uploaded_file_name': uploaded_file.name,
+            'saved_filename': saved_filename,
+            'output_path': output_path,
+            'relative_folder': relative_folder,
+            'input_path': input_path,
+            'for_3d_printing': for_3d_printing,
+            'original_ext': original_ext,
         })
-        # Llamado a PrusaSlicer por CLI
-        stl_path = report.get('stl_output_path')
-        if (not stl_path or not os.path.exists(stl_path)) and original_ext == '.stl' and os.path.exists(input_path):
-            stl_path = input_path
-        if for_3d_printing and stl_path and os.path.exists(stl_path):
-            scale_factor = 1.0 # Blender ya se encarga de realizar la conversión a mm y lo indica en report.get('stl_scale', 1.0)
-            slicing_results = _slice_with_prusa(stl_path, scale_factor)
-            if slicing_results.get('success'):
-                response.update({
-                    'printingTimeMin': slicing_results['printingTimeMin'],
-                    'filamentGrams': slicing_results['filamentGrams'],
-                    'filamentVolumeCm3': slicing_results['filamentVolumeCm3'],
-                })
-            else:
-                error_detail = slicing_results.get('error')
-                logger.error("Error en PrusaSlicer CLI: %s", error_detail)
-                response['slicingError'] = error_detail or 'No se pudo estimar el costo de impresión 3D.'
-                response['printingTimeMin'] = 'Desconocido'
-                response['filamentGrams'] = 0
-                response['filamentVolumeCm3'] = 0
+    except Exception as exc:
+        logger.exception('No se pudo iniciar la evaluación del modelo')
+        return JsonResponse({'error': f'No se pudo iniciar la evaluación del modelo: {exc}'}, status=500)
 
-    elif not allowed:
-        response['message'] = (
-            'El modelo supera el límite de submallados. '
-            'Por favor, ingrese un modelo con menos submallados.'
-        )
-    else:
-        response['message'] = 'No se pudo exportar el modelo a GLB.'
+    return JsonResponse({
+        'jobId': job_id,
+        'status': 'queued',
+        'progress': 0,
+        'message': 'La evaluación se ejecuta en segundo plano.',
+        'statusUrl': f'/api/models/evaluate/status/{job_id}/',
+        'originalName': uploaded_file.name,
+    }, status=202)
 
-    return JsonResponse(response, status=200)
+
+@csrf_exempt
+def evaluate_3d_model_status(request, job_id):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    status_path = _job_status_path(job_id)
+    status_payload = _read_json_file(status_path)
+    if not status_payload:
+        return JsonResponse({'error': 'No se encontró el estado de la evaluación'}, status=404)
+
+    response_status = 200
+    if status_payload.get('status') == 'failed':
+        response_status = 500
+
+    return JsonResponse(status_payload, status=response_status)
 
 
 # --- PROJECT ---
