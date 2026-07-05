@@ -1681,20 +1681,33 @@ def get_user_projects(request, user_id):
             limit_clause = f" LIMIT {int(limit_param)}"
 
         project_query = f"""
-            SELECT DISTINCT ON (P.projectid) 
-                P.projectid, 
-                P.userid, 
-                P.projectname, 
-                P.createdat, 
-                P.is3dprinting, 
-                P.isactive, 
-                PV.createdat AS version_createdat
-            FROM teg_oltp.project P
-            JOIN teg_oltp.projectversion PV ON P.projectid = PV.projectid
-            WHERE P.userid = ?
-            AND P.isactive = true 
-            AND PV.isdraft = false
-            ORDER BY P.projectid, PV.createdat DESC
+            WITH versiones_ordenadas AS (
+                SELECT 
+                    P.projectid, 
+                    P.userid, 
+                    P.projectname, 
+                    P.createdat, 
+                    P.is3dprinting, 
+                    P.isactive, 
+                    PV.createdat AS version_createdat,
+                    ROW_NUMBER() OVER(PARTITION BY P.projectid ORDER BY PV.createdat DESC) as fila
+                FROM teg_oltp.project P
+                JOIN teg_oltp.projectversion PV ON P.projectid = PV.projectid
+                WHERE P.userid = ?
+                AND P.isactive = true 
+                AND PV.isdraft = false
+            )
+            SELECT 
+                projectid, 
+                userid, 
+                projectname, 
+                createdat, 
+                is3dprinting, 
+                isactive, 
+                version_createdat
+            FROM versiones_ordenadas
+            WHERE fila = 1
+            ORDER BY version_createdat DESC
             {limit_clause};
         """
         cursor.execute(project_query, (user_id,))
