@@ -268,16 +268,35 @@ def analyze_model_submeshes(filename=""):
                 volume_internal = abs(bm.calc_volume())
                 volume_method = 'closed'
             else:
+                print("Evaluating convex hull...", flush=True) 
                 hull_bm = bmesh.new()
-                hull_bm.from_mesh(mesh_eval)
                 try:
-                    bmesh.ops.convex_hull(hull_bm, input=hull_bm.verts, use_existing_faces=True)
+                    # Estrategia de Nube de Puntos. Copia de solo los vértices de la malla original al BMesh del cascarón
+                    for v in mesh_eval.vertices:
+                        hull_bm.verts.new(v.co)
+                        
+                    # Actualización del índice interno de BMesh antes de operar
+                    hull_bm.verts.ensure_lookup_table()
+
+                    # Envoltura convexa pasando la secuencia como lista estática
+                    bmesh.ops.convex_hull(hull_bm, input=list(hull_bm.verts))
+
+                    # Triangulación y orientación de normales
+                    bmesh.ops.triangulate(hull_bm, faces=list(hull_bm.faces))
+                    bmesh.ops.recalc_face_normals(hull_bm, faces=list(hull_bm.faces))
+
+                    # Cálculo exacto del cascarón
                     volume_internal = abs(hull_bm.calc_volume())
                     volume_method = 'convex_hull'
-                except Exception:
+                        
+                except Exception as e:
+                    print(f"Error en convex hull: {str(e)}", flush=True) 
                     volume_internal = 0.0
                     volume_method = 'failed'
-                hull_bm.free()
+                        
+                finally:
+                    # Liberación de memoria
+                    hull_bm.free()
         else:
             volume_internal = 0.0
 
