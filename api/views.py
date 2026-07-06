@@ -1455,7 +1455,7 @@ def save_project_version(request):
                         UPDATE teg_oltp.projectversion
                         SET object3durl = ?, costsnapshot_usd = ?, createdat = ?, 
                             estimatedweight_g = ?, printingtime_min = ?, 
-                            gbboxwidth_x = ?, gbboxheight_y = ?, gbboxdepth_z = ?
+                            gbbox_x = ?, gbbox_y = ?, gbbox_z = ?
                         WHERE projectid = ? AND versionnumber = ?;
                     """, (
                         version_data.get('object3durl'),
@@ -1463,9 +1463,9 @@ def save_project_version(request):
                         version_data.get('createdat'),
                         version_data.get('estimatedweight_g'),
                         version_data.get('printingtime_min'),
-                        version_data.get('gbboxwidth_x'),
-                        version_data.get('gbboxheight_y'),
-                        version_data.get('gbboxdepth_z'),
+                        version_data.get('gbbox_x'),
+                        version_data.get('gbbox_y'),
+                        version_data.get('gbbox_z'),
                         project_id,
                         next_version
                     ))
@@ -1476,7 +1476,7 @@ def save_project_version(request):
                         INSERT INTO teg_oltp.projectversion (
                         projectid, versionnumber, object3durl, costsnapshot_usd, 
                         createdat, estimatedweight_g, printingtime_min, 
-                        gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
+                        gbbox_x, gbbox_y, gbbox_z, isdraft
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, True);
                     """, (
                         project_id,
@@ -1486,9 +1486,9 @@ def save_project_version(request):
                         version_data.get('createdat'),
                         version_data.get('estimatedweight_g'),
                         version_data.get('printingtime_min'),
-                        version_data.get('gbboxwidth_x'),
-                        version_data.get('gbboxheight_y'),
-                        version_data.get('gbboxdepth_z')
+                        version_data.get('gbbox_x'),
+                        version_data.get('gbbox_y'),
+                        version_data.get('gbbox_z')
                     ))
                 
                 # Registro de Submallados y Materiales
@@ -1519,7 +1519,7 @@ def save_project_version(request):
                         cursor.execute("""
                             INSERT INTO teg_oltp.submesh (
                                 projectid, versionnumber, submeshname, volume_cm3,
-                                area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                                area_cm2, bbox_x, bbox_y, bbox_z
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             RETURNING submeshid;
                         """, (
@@ -1528,9 +1528,9 @@ def save_project_version(request):
                             mesh.get('submeshName'),
                             mesh.get('volume_cm3'),
                             mesh.get('area_cm2'),
-                            mesh.get('bboxwidth_x'),
-                            mesh.get('bboxheight_y'),
-                            mesh.get('bboxdepth_z')
+                            mesh.get('bbox_x'),
+                            mesh.get('bbox_y'),
+                            mesh.get('bbox_z')
                         ))
 
                         # Captura del identity
@@ -1567,9 +1567,9 @@ def save_project_version(request):
                     # OJO: Ya se ha corregido la causa de la pérdida de información por recargas. Se puede modificar este query y hacer un insert normal
                     cursor.execute("""
                         INSERT INTO teg_oltp.submesh (
-                            projectid, versionnumber, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                            projectid, versionnumber, submeshname, volume_cm3, area_cm2, bbox_x, bbox_y, bbox_z
                         )
-                        SELECT projectid, ?, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                        SELECT projectid, ?, submeshname, volume_cm3, area_cm2, bbox_x, bbox_y, bbox_z
                         FROM teg_oltp.submesh
                         WHERE projectid = ? AND versionnumber = ?
                         ORDER BY submeshid ASC
@@ -1727,7 +1727,7 @@ def get_user_projects(request, user_id):
             # Versiones del proyecto
             version_query = """
                 SELECT versionnumber, object3durl, costsnapshot_usd, createdat, 
-                       estimatedweight_g, printingtime_min, gbboxwidth_x, gbboxheight_y, gbboxdepth_z, isdraft
+                       estimatedweight_g, printingtime_min, gbbox_x, gbbox_y, gbbox_z, isdraft
                 FROM teg_oltp.projectversion
                 WHERE projectid = ?
                 ORDER BY createdat ASC;
@@ -1765,7 +1765,7 @@ def get_user_projects(request, user_id):
 
                 # Submallados de la versión del proyecto
                 submesh_query = """
-                    SELECT submeshid, submeshname, volume_cm3, area_cm2, bboxwidth_x, bboxheight_y, bboxdepth_z
+                    SELECT submeshid, submeshname, volume_cm3, area_cm2, bbox_x, bbox_y, bbox_z
                     FROM teg_oltp.submesh
                     WHERE projectid = ? AND versionnumber = ?;
                 """
@@ -1841,9 +1841,9 @@ def get_user_projects(request, user_id):
                     'estimatedWeightG': float(ver[4]) if ver[4] else 0.0,
                     'filamentGrams': float(ver[4]) if ver[4] else 0.0,
                     'printingTimeMin': float(ver[5]) if ver[5] else 0.0,
-                    'gbboxwidth_x': float(ver[6]) if ver[6] else 0.0,
-                    'gbboxheight_y': float(ver[7]) if ver[7] else 0.0,
-                    'gbboxdepth_z': float(ver[8]) if ver[8] else 0.0,
+                    'gbbox_x': float(ver[6]) if ver[6] else 0.0,
+                    'gbbox_y': float(ver[7]) if ver[7] else 0.0,
+                    'gbbox_z': float(ver[8]) if ver[8] else 0.0,
                     'submeshes': formatted_submeshes
                 })
             
