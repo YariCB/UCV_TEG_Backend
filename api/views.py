@@ -1799,21 +1799,31 @@ def get_user_projects(request, user_id):
                             'pricePerCm3': float(assignments[1]) if assignments[1] else 0.0,
                             'calculationMethod': assignments[6]
                         }
+
+                    # Recuperación de ejes puros de la BD transaccional
+                    x_axis = float(sub[4]) if sub[4] else 0.0
+                    y_axis = float(sub[5]) if sub[5] else 0.0
+                    z_axis = float(sub[6]) if sub[6] else 0.0
+
+                    # Ordenamiento de dimensiones físicas para determinar ancho, largo y grosor
+                    physicalDimensions = sorted([x_axis, y_axis, z_axis], reverse=True)
                     
                     formatted_submeshes.append({
                         'id': f"submesh-{s_id}",
                         'name': sub[1],
                         'volumeCm3': float(sub[2]) if sub[2] else 0.0,
                         'areaCm2': float(sub[3]) if sub[3] else 0.0,
+                        # Paradigma físico
                         'bbox_cm': {
-                            'width_cm': float(sub[4]) if sub[4] else 0.0, # bboxwidth_x
-                            'length_cm': float(sub[6]) if sub[6] else 0.0, # bboxdepth_z
-                            'thickness_cm': float(sub[5]) if sub[5] else 0.0, # bboxheight_y
+                            'length_cm': physicalDimensions[0],
+                            'width_cm': physicalDimensions[1],
+                            'thickness_cm': physicalDimensions[2]
                         },
+                        # Paradigma espacial
                         'bboxRawCm': {
-                            'x': float(sub[4]) if sub[4] else 0.0,
-                            'y': float(sub[5]) if sub[5] else 0.0,
-                            'z': float(sub[6]) if sub[6] else 0.0,
+                            'x': x_axis,
+                            'y': y_axis,
+                            'z': z_axis,
                         },
                         'material': material_data
                     })
