@@ -1449,6 +1449,11 @@ def save_project_version(request):
                 
                 # Registro de la versión
 
+                # OJO: Manejo de error si PrusaSlicer no pudo calcular - Hallar causa en estos casos
+                printing_time = version_data.get('printingtime_min')
+                if printing_time == "Desconocido":
+                    printing_time = -1
+
                 # Si se está actualizando el borrador anterior
                 if is_updating_draft:
                     cursor.execute("""
@@ -1462,7 +1467,7 @@ def save_project_version(request):
                         version_data.get('costsnapshot_usd'),
                         version_data.get('createdat'),
                         version_data.get('estimatedweight_g'),
-                        version_data.get('printingtime_min'),
+                        printing_time,
                         version_data.get('gbbox_x'),
                         version_data.get('gbbox_y'),
                         version_data.get('gbbox_z'),
@@ -1485,7 +1490,7 @@ def save_project_version(request):
                         version_data.get('costsnapshot_usd'),
                         version_data.get('createdat'),
                         version_data.get('estimatedweight_g'),
-                        version_data.get('printingtime_min'),
+                        printing_time,
                         version_data.get('gbbox_x'),
                         version_data.get('gbbox_y'),
                         version_data.get('gbbox_z')
