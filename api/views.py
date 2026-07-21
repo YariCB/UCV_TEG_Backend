@@ -1155,12 +1155,15 @@ def _slice_with_prusa(stl_path, scale_factor=1.0):
                     raw_time = parts[1].strip()
                     hours_match = re.search(r'(\d+)\s*h', raw_time)
                     minutes_match = re.search(r'(\d+)\s*m', raw_time)
+                    seconds_match = re.search(r'(\d+)\s*s', raw_time)
                     
                     total_minutes = 0
                     if hours_match:
                         total_minutes += int(hours_match.group(1)) * 60
                     if minutes_match:
                         total_minutes += int(minutes_match.group(1))
+                    if seconds_match:
+                        total_minutes += int(seconds_match.group(1)) / 60.0
                         
                     printing_time_min = str(total_minutes) if total_minutes > 0 else raw_time
 
