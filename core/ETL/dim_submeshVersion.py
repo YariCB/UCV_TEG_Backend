@@ -16,7 +16,34 @@ def run_dim_submesh_sync(project_id, version_number):
 
     try:
         cursor = conn.cursor()
-        
+
+        # Limpieza de Huérfanos
+
+        # Limpieza de hechos huérfanos para evitar errores de FK
+        cleanup_facts_query = """
+            DELETE FROM teg_olap.fact_costestimation
+            WHERE skdimsubmesh IN (
+                SELECT skdimsubmesh FROM teg_olap.dimsubmeshversion
+                WHERE projectid = ? AND versionnumber = ?
+                AND submeshid NOT IN (
+                    SELECT submeshid FROM teg_oltp.submesh 
+                    WHERE projectid = ? AND versionnumber = ?
+                )
+            );
+        """
+        cursor.execute(cleanup_facts_query, (project_id, version_number, project_id, version_number))
+
+        # Limpieza de dimensiones huérfanas
+        cleanup_dims_query = """
+            DELETE FROM teg_olap.dimsubmeshversion
+            WHERE projectid = ? AND versionnumber = ?
+            AND submeshid NOT IN (
+                SELECT submeshid FROM teg_oltp.submesh 
+                WHERE projectid = ? AND versionnumber = ?
+            );
+        """
+        cursor.execute(cleanup_dims_query, (project_id, version_number, project_id, version_number))
+
         # Extracción y Transformación
         extract_query = """
             SELECT 
