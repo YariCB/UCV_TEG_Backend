@@ -968,7 +968,8 @@ def get_user_materials(request, user_id):
                     D.calculationmethod,
                     U.conversionfactor,
                     U_dens.abbreviation AS DensityAbb,
-					U_gros.abbreviation AS ThicknessAbbr
+					U_gros.abbreviation AS ThicknessAbbr,
+                    U.isbase
             FROM teg_oltp.material M
             JOIN teg_oltp.materialclassification C ON M.materialclassid = C.materialclassid
             JOIN teg_oltp.units U ON M.unitid = U.unitid
@@ -1004,7 +1005,8 @@ def get_user_materials(request, user_id):
                 'calculationMethod': row[21],
                 'conversionFactor': row[22],
                 'densityUnitAbbreviation': row[23],
-                'thicknessUnitAbbreviation': row[24]
+                'thicknessUnitAbbreviation': row[24],
+                'isBaseUnit': row[25]
             } 
             for row in cursor.fetchall()
         ]
