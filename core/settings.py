@@ -19,6 +19,7 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "0.0.0.0",
     "datamesh-teg.loca.lt",
+    "grafting-single-capsize.ngrok-free.dev"
 ]
 
 

@@ -75,6 +75,39 @@ services:
       - metabase_data:/var/lib/postgresql/data
     networks:
       - back-net
+    
+  # Túnel de Certificación para la App
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: teg_tunnel
+    restart: unless-stopped
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    command:
+      - "http"
+      - "--url=${NGROK_DOMAIN}"
+      - "frontend:80"
+    networks:
+      - front-net
+    depends_on:
+      - frontend
+  
+  # Túnel de Certificación para Metabase
+  ngrok-metabase:
+    image: ngrok/ngrok:latest
+    container_name: teg_tunnel_metabase
+    restart: unless-stopped
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_METABASE_AUTHTOKEN}
+    command:
+      - "http"
+      - "--url=${NGROK_METABASE_DOMAIN}"
+      - "metabase:3000"
+    networks:
+      - front-net
+      - back-net
+    depends_on:
+      - metabase
 
 networks:
   front-net:
