@@ -118,6 +118,11 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Upload limits for large 3D models. The frontend proxy already caps request
+# bodies, but Django still needs a permissive body limit for multipart uploads.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+
 # CORS
 CORS_ALLOWED_ORIGINS = [
     "http://localhost",

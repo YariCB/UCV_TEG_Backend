@@ -1177,8 +1177,8 @@ def _slice_with_prusa(stl_path, scale_factor=1.0):
             }
 
         # Eliminación del archivo temporal (Descomentar para producción, comentar en desarrollo)
-        # if os.path.exists(actual_gcode_path):
-        #     os.remove(actual_gcode_path)
+        if os.path.exists(actual_gcode_path):
+            os.remove(actual_gcode_path)
 
         print(f"[PrusaCLI] Resultados - printingTimeMin: {printing_time_min} min, filamentGrams: {filament_grams} g, filamentVolumeCm3: {filament_cm3} cm³")
 

@@ -109,10 +109,13 @@ def apply_gltf_export_options(props, kwargs):
         kwargs['export_texcoords'] = True
     if 'export_normals' in props:
         kwargs['export_normals'] = True
-    if 'export_tangents' in props:
-        kwargs['export_tangents'] = True
-    if 'export_extras' in props:
-        kwargs['export_extras'] = True
+    # Compresión de malla con Draco
+    kwargs['export_draco_mesh_compression_enable'] = True
+    kwargs['export_draco_mesh_compression_level'] = 6
+    kwargs['export_draco_position_quantization'] = 14
+    kwargs['export_draco_normal_quantization'] = 10
+    kwargs['export_draco_texcoord_quantization'] = 12
+    
     return kwargs
 
 
@@ -528,13 +531,26 @@ def main(args):
     export_format = None
     stl_output_path = None
 
-    # Verificación de cumplimiento del límite de submallados
     if args.max_submeshes <= 0 or submesh_count <= args.max_submeshes:
-        emit_progress(60, 'export_glb', 'Exportando vista web en GLB.')
+        emit_progress(60, 'export_glb', 'Reduciendo polígonos y exportando vista web.')
+        
+        # Temporal: Modificador de decimación
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH':
+                mod = obj.modifiers.new(name="Decimate_Web", type='DECIMATE')
+                # Reduce al 10% de su tamaño original
+                mod.ratio = 0.10 
+                
         # Exportación a GLB para visualización web
         output_path, export_format = export_glb(args.output)
         exported = True
         emit_progress(75, 'export_glb', 'Exportación GLB completada.')
+        
+        # Desactivación del modificador para NO afectar el STL de impresión 3D
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH' and "Decimate_Web" in obj.modifiers:
+                obj.modifiers.remove(obj.modifiers["Decimate_Web"])
+
         if args.for_3d_printing:
             export_scale = 1.0 if needs_millimeters_fix else 1000.0
             base_output_path = os.path.splitext(args.output)[0]
