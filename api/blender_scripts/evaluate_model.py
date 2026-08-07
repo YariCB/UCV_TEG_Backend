@@ -97,10 +97,16 @@ def import_obj(filepath):
 
     operator(**kwargs)
 
+# Contador de polígonos (caras) de todas las mallas en la escena
+def count_total_faces():
+    total_faces = 0
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH':
+            total_faces += len(obj.data.polygons)
+    return total_faces
 
-# Inyección de parámetros de optimización para asegurar que las mallas web mantengan
-# colores, normales, tangentes y coordenadas UV en el visualizador Three.js
-def apply_gltf_export_options(props, kwargs):
+
+def apply_gltf_export_options(props, kwargs, total_faces, file_size_bytes):
     if 'export_materials' in props:
         kwargs['export_materials'] = 'EXPORT'
     if 'export_colors' in props:
@@ -109,23 +115,39 @@ def apply_gltf_export_options(props, kwargs):
         kwargs['export_texcoords'] = True
     if 'export_normals' in props:
         kwargs['export_normals'] = True
-    # Compresión de malla con Draco
-    kwargs['export_draco_mesh_compression_enable'] = True
-    kwargs['export_draco_mesh_compression_level'] = 6
-    kwargs['export_draco_position_quantization'] = 14
-    kwargs['export_draco_normal_quantization'] = 10
-    kwargs['export_draco_texcoord_quantization'] = 12
     
+    # Lógica de compresión de archivos
+    if total_faces < 15000 or file_size_bytes <= 1048576:
+        # Modelos muy simples o livianos: Desactivar Draco para mantener calidad
+        kwargs['export_draco_mesh_compression_enable'] = False
+    else:
+        # Modelos medianos y pesados: Activar Draco con parámetros adaptativos según el conteo de caras
+        kwargs['export_draco_mesh_compression_enable'] = True
+        kwargs['export_draco_normal_quantization'] = 10
+        kwargs['export_draco_texcoord_quantization'] = 12
+        if total_faces < 100000:
+            # Modelos medianos: Nivel de compresión suave y mayor precisión en los vértices (16 bits)
+            kwargs['export_draco_mesh_compression_level'] = 3
+            kwargs['export_draco_position_quantization'] = 16 
+        else:
+            # Modelos pesados: Nivel de compresión agresivo y menor precisión en los vértices (14 bits)
+            kwargs['export_draco_mesh_compression_level'] = 6
+            kwargs['export_draco_position_quantization'] = 14
+            
     return kwargs
 
 
 # Función de exportación a GLB para entornos web, con manejo de compatibilidad
 # entre versiones de Blender y addons
-def export_glb(output_path):
+def export_glb(output_path, input_path):
     enable_addon('io_scene_gltf2')
     operator = get_gltf_operator()
     if not operator:
         raise RuntimeError('No se encontró el exportador glTF en Blender.')
+
+    # Conteo de polígonos y peso del archivo
+    total_faces = count_total_faces()
+    file_size_bytes = os.path.getsize(input_path)
 
     candidate_path = f"{os.path.splitext(output_path)[0]}.glb"
     os.makedirs(os.path.dirname(candidate_path), exist_ok=True)
@@ -141,7 +163,7 @@ def export_glb(output_path):
         kwargs = {'filepath': candidate_path, **extra_kwargs}
         if 'export_apply' in props:
             kwargs['export_apply'] = True
-        kwargs = apply_gltf_export_options(props, kwargs)
+        kwargs = apply_gltf_export_options(props, kwargs, total_faces, file_size_bytes)
         try:
             result = operator(**kwargs)
             if isinstance(result, set) and 'FINISHED' not in result:
@@ -535,14 +557,15 @@ def main(args):
         emit_progress(60, 'export_glb', 'Reduciendo polígonos y exportando vista web.')
         
         # Temporal: Modificador de decimación
-        for obj in bpy.context.scene.objects:
-            if obj.type == 'MESH':
-                mod = obj.modifiers.new(name="Decimate_Web", type='DECIMATE')
-                # Reduce al 10% de su tamaño original
-                mod.ratio = 0.10 
+        total_scene_faces = count_total_faces()
+        if total_scene_faces > 15000:
+            for obj in bpy.context.scene.objects:
+                if obj.type == 'MESH':
+                    mod = obj.modifiers.new(name="Decimate_Web", type='DECIMATE')
+                    mod.ratio = 0.10
                 
         # Exportación a GLB para visualización web
-        output_path, export_format = export_glb(args.output)
+        output_path, export_format = export_glb(args.output, args.input)
         exported = True
         emit_progress(75, 'export_glb', 'Exportación GLB completada.')
         
