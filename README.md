@@ -95,3 +95,10 @@ Con fines de trazabilidad, este repositorio incluye copias de respaldo de archiv
 - `docs/respaldo-raiz/gitignore.root-backup`
 
 Estas copias son **solo de referencia**. La fuente oficial para ejecución es el archivo ubicado en la raíz del proyecto.
+
+
+## Respaldo de Scripts de Base de Datos
+
+Este repositorio incluye los scripts SQL utilizados para la creación de los esquemas OLTP y OLAP, el llenado de datos de tablas base y su mantenimiento.
+
+`docs/ddl-dml-scripts/`
