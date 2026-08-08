@@ -46,10 +46,12 @@ Prefijo base: `/api/`
 
 Definir variables en el archivo `.env` utilizado por el entorno de ejecución:
 
-- `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`
-- `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`
-- `EMAIL_USE_TLS`, `EMAIL_USE_SSL`
-- Variables de Metabase usadas por `docker-compose` en la raíz
+- Variables de la Base de Datos: `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`
+- Variables de Metabase: `MB_DB_DBNAME`, `MB_SITE_URL`, `MB_SECRET_KEY`, `MB_DASHBOARD_ID`
+- Variables de Django: `VITE_APP_NAME`, `VITE_API_BASE_URL_CERT`
+- Variables del Envío de Correos: `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, `EMAIL_USE_SSL`
+- Variables para los Túneles del Ambiente de Certificación: `CLOUDFLARE_TOKEN`, `NGROK_METABASE_AUTHTOKEN`, `NGROK_METABASE_DOMAIN`
+
 
 ## Ejecución Local (Desarrollo)
 
@@ -77,7 +79,15 @@ Para iniciar el ecosistema completo (frontend, backend, PostgreSQL y Metabase), 
 docker compose up --build
 ```
 
-## Respaldo de configuracion de raiz
+## Entorno de Certificación y Exposición Externa
+
+Para la fase de pruebas y evaluación remota se configuró un entorno de certificación apoyado en servicios de tunelización segura:
+
+- **Metabase (Ngrok):** Se expone el servicio de analítica a través de un túnel Ngrok HTTPS. Esto es indispensable para garantizar el cumplimiento de políticas del navegador referentes a contenido mixto (*Mixed Content*) e iFrames seguros al renderizar los tableros dentro del frontend.
+- **Backend / API (Cloudflare Tunnel):** Se expone la API Django mediante un túnel de Cloudflare, proveyendo un endpoint público seguro encriptado (TLS) para el consumo de la aplicación web publicada.
+
+
+## Respaldo de Configuración de Raíz
 
 Con fines de trazabilidad, este repositorio incluye copias de respaldo de archivos de configuración global en:
 
