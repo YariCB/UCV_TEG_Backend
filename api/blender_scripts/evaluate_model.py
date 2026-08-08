@@ -646,7 +646,7 @@ def main(args):
         'needs_millimeters_fix': needs_millimeters_fix,
         'stl_scale': 1.0 if needs_millimeters_fix else 1000.0,
     })
-    emit_progress(100, 'done', 'Procesamiento completado correctamente.', submeshCount=submesh_count)
+    emit_progress(100, 'done', 'Procesamiento completado. Preparando editor de proyecto.', submeshCount=submesh_count)
 
 
 if __name__ == '__main__':

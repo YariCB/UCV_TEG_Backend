@@ -267,7 +267,7 @@ def _run_model_evaluation_job(job_id, job_context):
             status='completed',
             stage='done',
             progress=100,
-            message='El backend terminó de procesar el modelo.',
+            message='El modelo 3D ha sido procesado.',
             result=response,
         )
         _emit_job_log(job_id, f"{log_prefix} completed")
