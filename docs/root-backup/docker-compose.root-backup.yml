@@ -76,23 +76,20 @@ services:
     networks:
       - back-net
     
-  # Túnel de Certificación para la App
-  ngrok:
-    image: ngrok/ngrok:latest
+  # Túnel de Cloudflare para la Aplicación Principal
+  cloudflared:
+    image: cloudflare/cloudflared:latest
     container_name: teg_tunnel
     restart: unless-stopped
+    command: tunnel run
     environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    command:
-      - "http"
-      - "--url=${NGROK_DOMAIN}"
-      - "frontend:80"
+      - TUNNEL_TOKEN=${CLOUDFLARE_TOKEN}
     networks:
       - front-net
     depends_on:
       - frontend
   
-  # Túnel de Certificación para Metabase
+  # Túnel de Ngrok para Metabase 
   ngrok-metabase:
     image: ngrok/ngrok:latest
     container_name: teg_tunnel_metabase
